@@ -16,12 +16,16 @@ defmodule SnapconWeb.JsonSigner do
         full = IO.iodata_to_binary(Enum.reverse([body | acc]))
         digest = :crypto.hash_final(hasher)
 
-        [sig_header] = get_req_header(conn, "x-cyrene-sig")
+        # client should send at most one `x-cyrene-sig` out of band
+        case get_req_header(conn, "x-cyrene-sig") do
+          [sig_header] ->
+            conn
+            |> put_private(:cyrene_digest, digest)
+            |> put_private(:cyrene_sig, sig_header)
+            |> put_private(:cyrene_len, String.length(full))
 
-        conn = conn
-          |> put_private(:cyrene_digest, digest)
-          |> put_private(:cyrene_sig, sig_header)
-          |> put_private(:cyrene_len, String.length(full))
+          _ -> conn
+        end
 
         {:ok, full, conn}
 
