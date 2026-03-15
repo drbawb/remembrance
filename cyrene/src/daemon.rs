@@ -1,6 +1,6 @@
 use data_encoding::BASE64;
 use ed25519_dalek::{Signer, SigningKey};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use ureq;
@@ -9,17 +9,28 @@ use crate::config::DaemonConfig;
 
 use std::{fs, io};
 
-#[derive(Serialize)]
-struct Message<'a> {
+#[derive(Debug, Serialize)]
+struct TestMessage<'a> {
     id: u64,
     kind: &'a str,
     body: &'a str,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+enum SocketMessage {
+    Authenticate { name: String },
+
+    JobRecvStarted { id: i32, listen_addr: String },
+    JobRecvTerminated { id: i32, code: i32, reason: String },
 }
 
 #[derive(Error, Debug)]
 pub enum RunDaemonError {
     #[error("config error: {0}")]
     Config(String),
+
+    #[error("json parse error: {0}")]
+    JsonEncoding(#[from] serde_json::Error),
 
     #[error("io error: {0}")]
     Io(#[from] io::Error),
@@ -45,7 +56,7 @@ pub fn run_call_master() -> Result<String> {
     let url = format!("{}/test", config.controller.url);
 
     // generate the json message
-    let test_message = Message { id: 0, kind: "test", body: "hello, world." };
+    let test_message = TestMessage { id: 0, kind: "test", body: "hello, world." };
 
     let json_blob = serde_json::to_vec(&test_message)
         .map_err(|e| Error::Misc(format!("error: {e:?}")))?;
@@ -100,6 +111,11 @@ pub fn run_websocket_test() -> Result<String> {
     socket.write(Message::Text(msg_bytes))?;
     socket.flush()?;
     println!("wrote message");
+
+    // test
+    let foo = SocketMessage::Authenticate { name: "hitomi".to_string() };
+    let json_bytes = serde_json::to_string(&foo)?;
+    println!("message: {json_bytes}");
 
     'ws: loop {
         std::thread::sleep_ms(100);

@@ -24,7 +24,7 @@ defmodule SnapconWeb.ApiController do
     end
   end
 
-  def test(conn, params) do
+  def test(conn, _params) do
     digest = conn.private[:cyrene_digest]
     signature = conn.private[:cyrene_sig]
     body_len = conn.private[:cyrene_len]

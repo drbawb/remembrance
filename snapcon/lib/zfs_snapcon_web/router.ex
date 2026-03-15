@@ -17,6 +17,7 @@ defmodule SnapconWeb.Router do
   scope "/api", SnapconWeb do
     pipe_through :api
 
+    get "/websocket", ApiServerPlug, [wat: "the"]
     post "/test", ApiController, :test
   end
 

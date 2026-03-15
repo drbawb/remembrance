@@ -15,9 +15,6 @@ defmodule SnapconWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
-  socket "/api", SnapconWeb.ApiSocket, 
-    websocket: [subprotocols: ["x-cyrene-v1"]]
-
   # Serve at "/" the static files from "priv/static" directory.
   #
   # You should set gzip to true if you are running phx.digest
