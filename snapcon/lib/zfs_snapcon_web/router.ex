@@ -14,6 +14,12 @@ defmodule SnapconWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/api", SnapconWeb do
+    pipe_through :api
+
+    post "/test", ApiController, :test
+  end
+
   scope "/", SnapconWeb do
     pipe_through :browser
 

@@ -51,6 +51,7 @@ defmodule Snapcon.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.5"},
 
+      {:eddy, "~> 1.0"},
       {:lacca, "~> 0.2"},
       {:ex2ms, "~> 1.0"},
     ]
