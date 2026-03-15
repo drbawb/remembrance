@@ -1,0 +1,3 @@
+[controller]
+url = "http://example.com:4000/api"
+pubkey = "<base64>"
