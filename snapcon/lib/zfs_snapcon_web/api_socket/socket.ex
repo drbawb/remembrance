@@ -9,7 +9,7 @@ defmodule SnapconWeb.ApiServer do
   end
 
   def handle_in({text, _opts}, state) do
-    {:reply, :ok, {:text, text}, state}
+    {:push, {:text, text}, state}
   end
 
   def handle_info(_, state) do

@@ -25,6 +25,7 @@ defmodule SnapconWeb.Router do
     pipe_through :browser
 
     live "/", JobQueueLive
+    resources "/hosts", HostController
   end
 
   # Other scopes may use custom stacks.
