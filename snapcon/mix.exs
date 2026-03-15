@@ -5,6 +5,7 @@ defmodule Snapcon.MixProject do
     [
       app: :zfs_snapcon,
       version: "0.1.0",
+      license: ["BSD-3-Clause"],
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -55,6 +56,8 @@ defmodule Snapcon.MixProject do
       {:ex2ms, "~> 1.0"},
       {:lacca, "~> 0.2"},
       {:websock_adapter, "~> 0.5"},
+
+      {:depscheck, "~> 1.0", only: :dev, runtime: false},
     ]
   end
 
