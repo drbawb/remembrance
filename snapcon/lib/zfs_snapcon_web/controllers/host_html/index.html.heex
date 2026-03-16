@@ -1,25 +1,34 @@
-<.header>
-  Listing Hosts
-  <:actions>
-    <.link href={~p"/hosts/new"}>
-      <.button>New Host</.button>
-    </.link>
-  </:actions>
-</.header>
+<.link href={~p"/hosts/new"}>
+<button class="button">New Host</button>
+</.link>
+<hr>
 
-<.table id="hosts" rows={@hosts} row_click={&JS.navigate(~p"/hosts/#{&1}")}>
-  <:col :let={host} label="Name">{host.name}</:col>
-  <:col :let={host} label="Description">{host.description}</:col>
-  <:col :let={host} label="Pubkey">{host.pubkey}</:col>
-  <:action :let={host}>
-    <div class="sr-only">
-      <.link navigate={~p"/hosts/#{host}"}>Show</.link>
-    </div>
-    <.link navigate={~p"/hosts/#{host}/edit"}>Edit</.link>
-  </:action>
-  <:action :let={host}>
-    <.link href={~p"/hosts/#{host}"} method="delete" data-confirm="Are you sure?">
-      Delete
-    </.link>
-  </:action>
-</.table>
+<table class="table table-job-log table-striped table-gray">
+  <thead class="mono">
+    <tr class="bg-light-orange">
+      <th>Name</th>
+      <th>Description</th>
+      <th>Key</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+
+  <tbody class="mono">
+    <%= for host <- @hosts do %>
+    <tr>
+      <td><%= host.name %></td>
+      <td><%= host.description %></td>
+      <td><%= host.pubkey %></td>
+
+      <td>
+      <.link href={~p"/hosts/#{host.id}"}
+        method="delete"
+        data-confirm="Are you sure you want to remove {host.name} from the controller?">
+        <button class="button bg-light-orange">delete</button>
+      </.link> <!-- delete -->
+
+      </td>
+    </tr>
+    <% end %>
+  </tbody>
+</table>
