@@ -1,7 +1,7 @@
 defmodule SnapconWeb.PageFragments do
   use Phoenix.Component
 
-  embed_templates "page_fragments/*"
+  embed_templates "fragments/*"
 
   attr :title, :string, required: true
   attr :subtitle, :string
