@@ -48,15 +48,4 @@
   </tbody>
 </table>
 
-
-<%= if @error_list != [] do %>
-<h2> Error List </h2>
-<% end %>
-
-<table>
-<%= for error <- @error_list do %>
-  <tr>
-    <td><%= "error: #{error}" %></td>
-  </tr>
-<% end %>
-</table>
+<.live_error_list errors={@error_list} />

@@ -1,5 +1,4 @@
 defmodule SnapconWeb.JsonSigner do
-
   import Plug.Conn, only: [get_req_header: 2, put_private: 3]
 
   @moduledoc """
@@ -17,7 +16,7 @@ defmodule SnapconWeb.JsonSigner do
         digest = :crypto.hash_final(hasher)
 
         # client should send at most one `x-cyrene-sig` out of band
-        case get_req_header(conn, "x-cyrene-sig") do
+        conn = case get_req_header(conn, "x-cyrene-sig") do
           [sig_header] ->
             conn
             |> put_private(:cyrene_digest, digest)

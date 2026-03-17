@@ -1,0 +1,11 @@
+<%= if @errors != [] do %>
+<h2> Error List </h2>
+<% end %>
+
+<table>
+<%= for error <- @errors do %>
+  <tr>
+    <td><%= "error: #{error}" %></td>
+  </tr>
+<% end %>
+</table>

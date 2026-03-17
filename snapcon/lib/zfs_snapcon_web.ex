@@ -55,6 +55,8 @@ defmodule SnapconWeb do
       use Phoenix.LiveView,
         layout: {SnapconWeb.Layouts, :app}
 
+      import SnapconWeb.LiveFragments
+
       unquote(html_helpers())
     end
   end

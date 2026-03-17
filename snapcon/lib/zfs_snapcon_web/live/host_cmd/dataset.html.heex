@@ -1,0 +1,32 @@
+<h2>Host Command Center</h2>
+<button class="button" phx-click="ask_list">List Datasets</button>
+<hr>
+
+<table class="table table-job-log table-striped table-gray">
+  <thead class="mono">
+    <tr class="bg-light-orange">
+      <th>Name</th>
+      <th>Used</th>
+      <th>Snap</th>
+      <th>Avail</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+
+  <tbody class="mono">
+    <%= for ds <- @datasets do %>
+    <tr>
+      <td><%= ds.name %></td>
+      <td><%= ds.used_space %></td>
+      <td><%= ds.used_snap %></td>
+      <td><%= ds.avail_space %></td>
+
+      <td>
+        <button class="button">todo</button>
+      </td>
+    </tr>
+    <% end %>
+  </tbody>
+</table> <!-- host table -->
+
+<.live_error_list errors={@error_list} />

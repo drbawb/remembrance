@@ -25,6 +25,7 @@ defmodule SnapconWeb.Router do
     pipe_through :browser
 
     live "/", JobQueueLive
+    live "/watch/:name", HostCommandLive
     resources "/hosts", HostController
   end
 
