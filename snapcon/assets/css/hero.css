@@ -1,0 +1,15 @@
+.hero-box {
+	border: 1px #000 solid;
+	padding: 10px 5px;
+}
+
+h2.hero {
+}
+
+h3.hero {
+}
+
+hr.hero {
+	display: block;
+	border-top: 3px dotted #ccc;
+}

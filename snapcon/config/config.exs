@@ -36,7 +36,11 @@ config :esbuild,
   version: "0.17.11",
   zfs_snapcon: [
     args:
-      ~w(css/app.css js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
+         ~w(css/app.css css/hero.css)
+      ++ ~w(js/app.js)
+      ++ ~w(--bundle --target=es2017 --outdir=../priv/static/assets)
+      ++ ~w(--external:/fonts/* --external:/images/*),
+
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
   ]

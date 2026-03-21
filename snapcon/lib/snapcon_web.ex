@@ -90,7 +90,6 @@ defmodule SnapconWeb do
       # HTML escaping functionality
       import Phoenix.HTML
       # Core UI components
-      import SnapconWeb.CoreComponents
       import SnapconWeb.PageFragments
 
       # Shortcut for generating JS commands

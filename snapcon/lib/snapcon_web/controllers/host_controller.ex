@@ -11,7 +11,10 @@ defmodule SnapconWeb.HostController do
 
   def new(conn, _params) do
     changeset = BackupServer.change_host(%Host{})
-    render(conn, :new, changeset: changeset)
+
+    conn
+    |> put_hero("New Host", "Configure identity for a new daemon.")
+    |> render(:new, changeset: changeset)
   end
 
   def create(conn, %{"host" => host_params}) do
@@ -58,5 +61,11 @@ defmodule SnapconWeb.HostController do
     conn
     |> put_flash(:info, "Host deleted successfully.")
     |> redirect(to: ~p"/hosts")
+  end
+
+  defp put_hero(conn, title, subtitle \\ "") do
+    conn
+    |> assign(:hero_title,    title)
+    |> assign(:hero_subtitle, subtitle)
   end
 end

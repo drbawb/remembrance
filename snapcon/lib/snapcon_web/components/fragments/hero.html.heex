@@ -1,5 +1,6 @@
-<h2>{@title}</h2>
-<%= unless is_nil(@subtitle) do %>
-  <h3>{@subtitle}</h3>
-<% end %>
-<hr>
+<div class={["hero-box", @class]} {@rest}>
+  <h2 class="hero m-zero">{@title}</h2>
+  <%= unless is_nil(@subtitle) do %>
+    <h3 class="hero m-zero">{@subtitle}</h3>
+  <% end %>
+</div> <!-- outline -->

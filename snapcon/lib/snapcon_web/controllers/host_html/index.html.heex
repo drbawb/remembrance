@@ -1,6 +1,9 @@
-<.link href={~p"/hosts/new"}>
-<button class="button">New Host</button>
-</.link>
+<hr>
+<div class="fl-block fl-right">
+  <.link href={~p"/hosts/new"}>
+  <button class="button">New Host</button>
+  </.link>
+</div><!-- subnav ribbon -->
 <hr>
 
 <table class="table table-job-log table-striped table-gray">
@@ -21,11 +24,17 @@
       <td><%= host.pubkey %></td>
 
       <td>
-      <.link href={~p"/hosts/#{host.id}"}
+
+      <.button href={~p"/hosts/#{host.id}"} caption="view"/>
+
+      <.button 
+        class="bg-light-orange"
+        href={~p"/hosts/#{host.id}"}
         method="delete"
-        data-confirm="Are you sure you want to remove {host.name} from the controller?">
-        <button class="button bg-light-orange">delete</button>
-      </.link> <!-- delete -->
+        data-confirm={"Are you sure you want to remove #{host.name} from the controller?"}>
+
+      <span>delete</span>
+      </.button> <!-- delete -->
 
       </td>
     </tr>

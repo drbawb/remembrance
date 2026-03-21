@@ -1,3 +1,17 @@
+
+
+<.form :let={f} for={@changeset} action={~p"/hosts"}>
+  <div class="gr-form">
+    <.input type="text" field={f[:name]} >Name</.input>
+
+    <div class="full fl-inline fl-row fl-between">
+      <.button href={~p"/hosts"} caption="back"/>
+      <.button type="submit" caption="save"/>
+    </div><!-- button panel -->
+  </div>
+</.form>
+
+<!--
 <.header>
   New Host
   <:subtitle>Use this form to manage host records in your database.</:subtitle>
@@ -6,3 +20,4 @@
 <.host_form changeset={@changeset} action={~p"/hosts"} />
 
 <.back navigate={~p"/hosts"}>Back to hosts</.back>
+-->
