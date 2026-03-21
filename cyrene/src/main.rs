@@ -53,7 +53,8 @@ fn entry_run(args: RunArgs) -> Result<ExitCode> {
     let response_body = daemon::run_call_master()?;
     println!("response from controller: {response_body}");
 
-    daemon::run_websocket_test()?;
+    daemon::run_command_queue()?;
+    // daemon::run_websocket_test()?;
 
     Ok(ExitCode::from(0))
 }
