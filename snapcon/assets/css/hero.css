@@ -1,13 +1,11 @@
 .hero-box {
 	border: 1px #000 solid;
 	padding: 10px 5px;
+	margin-bottom: 30px;
 }
 
-h2.hero {
-}
-
-h3.hero {
-}
+h2.hero { font-size: 1.25rem; }
+h3.hero { font-size:  .85rem; }
 
 hr.hero {
 	display: block;

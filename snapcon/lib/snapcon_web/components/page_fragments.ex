@@ -2,6 +2,7 @@ defmodule SnapconWeb.PageFragments do
   use Phoenix.Component
 
   alias Phoenix.LiveView.JS
+  import SnapconWeb.LayoutHelpers
 
   embed_templates "fragments/*"
 
@@ -11,11 +12,21 @@ defmodule SnapconWeb.PageFragments do
   attr :rest, :global
   def hero(assigns)
 
+  attr :details, :list, default: []
+  def debug_details(assigns) do
+    ~H"""
+    <details :if={show_debug_details(@details)}>
+      <div class="debug-msg" :for={detail <- @details}>
+      {detail}
+      </div>
+    </details>
+    """
+  end
+
   attr :caption, :string, default: nil
   attr :class, :any, default: nil
   attr :rest, :global, include: ~w(href method)
   slot :inner_block, required: false
-
   def button(assigns) do
     ~H"""
     <.link class={["button", @class]} {@rest}>

@@ -60,6 +60,7 @@ config :zfs_snapcon, SnapconWeb.Endpoint,
 
 # Enable dev routes for dashboard and mailbox
 config :zfs_snapcon, dev_routes: true
+config :zfs_snapcon, show_debug_details: true
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :console, format: "[$level] $message\n"

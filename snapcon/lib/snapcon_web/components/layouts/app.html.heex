@@ -1,17 +1,17 @@
-<header>
-  <div class="fl-flex fl-row">
-    <.hero
-      title={assigns[:hero_title] || "Remembrance"}
-      subtitle={assigns[:hero_subtitle] || "ZFS Snapshot Console"}
-    />
+<div id="app-container" class="m-auto">
+  <header>
+    <div class="fl-flex fl-row">
+      <.hero
+        title={assigns[:hero_title] || "Remembrance"}
+        subtitle={assigns[:hero_subtitle] || "ZFS Snapshot Console"}
+      />
 
-    <div></div>
-  </div>
-  <!-- header blocks -->
-</header>
-<main>
-  <div class="app-container">
+      <.debug_details details={@dbg_lines} />
+    </div>
+    <!-- header blocks -->
+  </header>
+  <main>
     <.flash_group flash={@flash} />
     {render_slot(@inner_block)}
-  </div>
-</main>
+  </main>
+</div>

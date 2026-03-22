@@ -44,6 +44,10 @@ defmodule SnapconWeb do
 
       import Plug.Conn
 
+      # import some of the layout helpers ...
+      import SnapconWeb.LayoutHelpers,
+        only: [add_debug_line: 2]
+
       unquote(verified_routes())
     end
   end

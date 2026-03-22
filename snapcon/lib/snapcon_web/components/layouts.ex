@@ -8,6 +8,7 @@ defmodule SnapconWeb.Layouts do
 
   attr :hero_title, :string, default: "Remembrance"
   attr :hero_subtitle, :string, default: "ZFS Snapshot Console"
+  attr :dbg_lines, :list, default: [], doc: "list of debug messages to be collapsed"
   attr :flash, :map, required: true, doc: "the map of flash messages"
   slot :inner_block, required: true
   def app(assigns)

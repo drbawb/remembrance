@@ -25,7 +25,7 @@ defmodule SnapconWeb.HostController do
   def create(conn, %{"host" => host_params}) do
     case BackupServer.create_host(host_params) do
       {:ok, host} ->
-        Logger.debug("creating host :: #{inspect(host_params)}")
+        Logger.debug("creating host :: #{inspect(host)}")
 
         conn
         |> put_flash(:info, "Host created successfully.")

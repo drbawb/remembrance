@@ -31,6 +31,10 @@ body {
 .m-auto { margin: 0 auto; }
 .m-5    { margin: 5px 5px; }
 
+#app-container {
+	max-width: 960px;
+}
+
 .mono {
 	font-family: "Berkley Mono", monospace;
 }
