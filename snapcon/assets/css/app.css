@@ -31,13 +31,17 @@ body {
 .m-auto { margin: 0 auto; }
 .m-5    { margin: 5px 5px; }
 
+.w-540 { max-width: 540px; }
+.w-720 { max-width: 720px; }
+
 #app-container {
 	max-width: 960px;
 }
 
-.mono {
-	font-family: "Berkley Mono", monospace;
-}
+.ft-mono { font-family: "Berkley Mono", monospace; }
+.ft-smol { font-size: .75rem; } 
+.ft-b    { font-weight: bold; }
+.ft-em   { font-style: italic; }
 
 /* dots */
 .dot-10 {
@@ -56,11 +60,8 @@ body {
 /* forms and inputs */
 .gr-form {
 	display: grid;
+	align-items: center;
 	gap: .25rem;
-
-	max-width: 480px;
-	margin: 0 auto;
-
 	grid-template-columns: 1fr 2fr;
 }
 

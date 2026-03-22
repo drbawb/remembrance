@@ -1,7 +1,7 @@
 <Layouts.app {splat_app(assigns)}>
   <hr />
   <div class="fl-block fl-right">
-    <.link href={~p"/hosts/new"}>
+    <.link href={~p"/hosts/new?return=index"}>
       <button class="button">New Host</button>
     </.link>
   </div>
@@ -12,7 +12,6 @@
     <thead class="mono">
       <tr class="bg-light-orange">
         <th>Name</th>
-        <th>Description</th>
         <th>Key</th>
         <th>Actions</th>
       </tr>
@@ -22,11 +21,11 @@
       <%= for host <- @hosts do %>
         <tr>
           <td>{host.name}</td>
-          <td>{host.description}</td>
           <td>{host.pubkey}</td>
 
           <td>
             <.button href={~p"/hosts/#{host.id}"} caption="view" />
+            <.button href={~p"/hosts/#{host.id}/edit?return=index"} caption="edit" />
 
             <.button
               class="bg-light-orange"

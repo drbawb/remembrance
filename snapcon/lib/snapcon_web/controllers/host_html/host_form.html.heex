@@ -1,13 +1,14 @@
-<!--
-<.simple_form :let={f} for={@changeset} action={@action}>
-  <.error :if={@changeset.action}>
-    Oops, something went wrong! Please check the errors below.
-  </.error>
-  <.input field={f[:name]} type="text" label="Name" />
-  <.input field={f[:description]} type="text" label="Description" />
-  <.input field={f[:pubkey]} type="text" label="Pubkey" />
-  <:actions>
-    <.button>Save Host</.button>
-  </:actions>
-</.simple_form>
--->
+<.form :let={f} for={@changeset} action={@action}>
+  <div class="gr-form w-540 m-auto">
+    <input type="hidden" name="return" value={@return} />
+    <.input type="text" field={f[:name]}>Name</.input>
+    <.input type="text" field={f[:description]}>Description</.input>
+    <.input type="text" field={f[:pubkey]}>Pubkey</.input>
+
+    <div class="full fl-inline fl-row fl-between">
+      <.button href={~p"/hosts"} caption="back" />
+      <button class="button" type="submit">submit</button>
+    </div>
+    <!-- button panel -->
+  </div>
+</.form>

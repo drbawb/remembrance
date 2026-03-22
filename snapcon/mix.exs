@@ -57,7 +57,9 @@ defmodule Snapcon.MixProject do
       {:ex2ms, "~> 1.0"},
       {:lacca, "~> 0.2"},
       {:websock_adapter, "~> 0.5"},
-      {:depscheck, "~> 1.0", only: :dev, runtime: false}
+
+      {:depscheck, "~> 1.0", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.4", only: :dev, runtime: false},
     ]
   end
 

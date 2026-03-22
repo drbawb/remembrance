@@ -1,9 +1,11 @@
 defmodule Snapcon do
   @moduledoc """
-  Snapcon keeps the contexts that define your domain
-  and business logic.
+  `remembrance` is an administration console to manage the automation of
+  snapshot creation, snapshot thinning, and filesystem replication. 
 
-  Contexts are also responsible for managing your data, regardless
-  if it comes from the database, an external API or others.
+  This module contains the core logic for scheduling & monitoring the `cyrene`
+  daemons which are managed by the controller exposed via the `SnapconWeb` API.
+  Each daemon exposes an administrative interface for managing the ZFS pools
+  and datasets on that host.
   """
 end

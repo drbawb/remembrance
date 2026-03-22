@@ -1,23 +1,37 @@
 <Layouts.app {splat_app(assigns)}>
-  foo
+  <hr />
+  <div class="fl-block fl-between">
+    <.link href={~p"/hosts"}>
+      <button class="button">Back (All Hosts)</button>
+    </.link> <!-- back button -->
+
+    <div class="fl-inline fl-right">
+      <.button
+        class="bg-light-orange"
+        href={~p"/hosts/#{@host.id}"}
+        method="delete"
+        data-confirm={"Are you sure you want to remove #{@host.name} from the controller?"}>
+        <span>delete</span>
+      </.button>
+
+      <.link href={~p"/hosts/#{@host}/edit?return=show"}>
+        <button class="button">Edit Host</button>
+      </.link>
+    </div> <!-- actions -->
+  </div> <!-- subnav ribbon -->
+  <hr />
+
+  <div class="gr-form m-auto w-720">
+      <span>Name</span>
+      <.span txt={@host.name}/>
+
+      <span>Description</span>
+      <.span txt={@host.description}/>
+
+      <span>Pub Key</span>
+      <.span class="ft-b ft-smol ft-mono" txt={@host.pubkey}/>
+
+      <span>Status</span>
+      <.span txt="Pending"/>
+  </div>
 </Layouts.app>
-
-<!--
-<.link href={~p"/hosts"}>
-  Back to hosts
-</.link>
-
-<.link href={~p"/hosts/#{@host}/edit"}>
-  Edit Host
-</.link>
--->
-
-
-<!--
-<.list>
-  <:item title="Name">{@host.name}</:item>
-  <:item title="Description">{@host.description}</:item>
-  <:item title="Pubkey">{@host.pubkey}</:item>
-</.list>
--->
-

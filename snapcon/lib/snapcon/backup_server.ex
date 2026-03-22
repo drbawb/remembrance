@@ -1,6 +1,11 @@
 defmodule Snapcon.BackupServer do
   @moduledoc """
-  The BackupServer context.
+  This module currently exposes some helper functions for managing the host
+  configuration database.
+
+  In the future this will most likely be replaced w/ a `GenServer` that
+  handles commands by either proxying messages to/from the `cyrene` daemons
+  under management, or answering queries using cached information.
   """
 
   import Ecto.Query, warn: false

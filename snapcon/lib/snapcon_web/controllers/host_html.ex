@@ -7,6 +7,7 @@ defmodule SnapconWeb.HostHTML do
   Renders a host form.
   """
   attr :changeset, Ecto.Changeset, required: true
+  attr :return, :string, default: "show"
   attr :action, :string, required: true
 
   def host_form(assigns)

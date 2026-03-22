@@ -14,27 +14,33 @@ defmodule SnapconWeb.HostController do
     |> render(:index, hosts: hosts)
   end
 
-  def new(conn, _params) do
+  def new(conn, params) do
     changeset = BackupServer.change_host(%Host{})
+    return = Map.get(params, "return", "index")
 
     conn
     |> put_hero("New Host", "Configure identity for a new daemon.")
+    |> assign(:return, return)
     |> render(:new, changeset: changeset)
   end
 
-  def create(conn, %{"host" => host_params}) do
+  def create(conn, %{"host" => host_params} = params) do
+    return = Map.get(params, "return", "index")
+
     case BackupServer.create_host(host_params) do
       {:ok, host} ->
         Logger.debug("creating host :: #{inspect(host)}")
 
         conn
         |> put_flash(:info, "Host created successfully.")
-        |> redirect(to: ~p"/hosts")
+        |> redirect_ret(return, host.id)
 
       {:error, %Ecto.Changeset{} = changeset} ->
         Logger.error("changeset has errors :: #{inspect(changeset)}")
 
-        render(conn, :new, changeset: changeset)
+        conn
+        |> assign(:return, return)
+        |> render(:new, changeset: changeset)
     end
   end
 
@@ -46,20 +52,25 @@ defmodule SnapconWeb.HostController do
     |> render(:show, host: host)
   end
 
-  def edit(conn, %{"id" => id}) do
+  def edit(conn, %{"id" => id} = params) do
     host = BackupServer.get_host!(id)
     changeset = BackupServer.change_host(host)
-    render(conn, :edit, host: host, changeset: changeset)
+    return = Map.get(params, "return", "show")
+
+    conn
+    |> assign(:return, return)
+    |> render(:edit, host: host, changeset: changeset)
   end
 
-  def update(conn, %{"id" => id, "host" => host_params}) do
+  def update(conn, %{"id" => id, "host" => host_params} = params) do
     host = BackupServer.get_host!(id)
+    return = Map.get(params, "return", "show")
 
     case BackupServer.update_host(host, host_params) do
-      {:ok, host} ->
+      {:ok, _host} ->
         conn
         |> put_flash(:info, "Host updated successfully.")
-        |> redirect(to: ~p"/hosts/#{host}")
+        |> redirect_ret(return, id)
 
       {:error, %Ecto.Changeset{} = changeset} ->
         render(conn, :edit, host: host, changeset: changeset)
@@ -68,6 +79,7 @@ defmodule SnapconWeb.HostController do
 
   def delete(conn, %{"id" => id}) do
     host = BackupServer.get_host!(id)
+
     {:ok, _host} = BackupServer.delete_host(host)
 
     conn
@@ -75,7 +87,18 @@ defmodule SnapconWeb.HostController do
     |> redirect(to: ~p"/hosts")
   end
 
-  defp put_hero(conn, title, subtitle \\ "") do
+  defp redirect_ret(conn, return, id) do
+    Logger.debug "return :: #{return} for #{id}"
+
+    path = case return do
+      "index" -> ~p"/hosts"
+      "show"  -> ~p"/hosts/#{id}"
+    end
+
+    conn |> redirect(to: path)
+  end
+
+  defp put_hero(conn, title, subtitle) do
     conn
     |> assign(:hero_title, title)
     |> assign(:hero_subtitle, subtitle)

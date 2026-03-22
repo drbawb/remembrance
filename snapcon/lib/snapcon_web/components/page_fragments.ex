@@ -57,7 +57,9 @@ defmodule SnapconWeb.PageFragments do
         <span class="gr-form-bad-subtext" }>{msg}</span>
       </div>
     </label>
-    <input class="gr-form-label" id={@field.id} name={@field.name} type={@type} {@rest} />
+    <input class="gr-form-label" 
+    id={@field.id} name={@field.name} 
+    type={@type} value={@field.value} {@rest} />
     """
   end
 
