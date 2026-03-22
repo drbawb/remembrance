@@ -1,14 +1,14 @@
 defmodule SnapconWeb.Layouts do
   @moduledoc """
-  This module holds different layouts used by your application.
-
-  See the `layouts` directory for all templates available.
-  The "root" layout is a skeleton rendered as part of the
-  application router. The "app" layout is set as the default
-  layout on both `use SnapconWeb, :controller` and
-  `use SnapconWeb, :live_view`.
+  This module holds different layouts used by the console.
   """
   use SnapconWeb, :html
 
   embed_templates "layouts/*"
+
+  attr :hero_title, :string, default: "Remembrance"
+  attr :hero_subtitle, :string, default: "ZFS Snapshot Console"
+  attr :flash, :map, required: true, doc: "the map of flash messages"
+  slot :inner_block, required: true
+  def app(assigns)
 end

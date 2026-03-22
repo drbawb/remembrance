@@ -1,51 +1,53 @@
-<hr>
-<button class="button" phx-click="add_split">Add Split</button>
-<button class="button" phx-click="run_table">Run Jobs</button>
-<button class="button" phx-click="stop_table">Stop Jobs</button>
-<button class="button" phx-click="clear_errors">Clear Errors</button>
-<button class="button bg-light-orange" data-confirm="Really?" phx-click="kill_server">Kill Server</button>
-<button class="button bg-light-orange" data-confirm="Really?" phx-click="do_cleanup">Cleanup Dirs</button>
-<hr>
+<Layouts.app {assigns}>
+  <hr>
+  <button class="button" phx-click="add_split">Add Split</button>
+  <button class="button" phx-click="run_table">Run Jobs</button>
+  <button class="button" phx-click="stop_table">Stop Jobs</button>
+  <button class="button" phx-click="clear_errors">Clear Errors</button>
+  <button class="button bg-light-orange" data-confirm="Really?" phx-click="kill_server">Kill Server</button>
+  <button class="button bg-light-orange" data-confirm="Really?" phx-click="do_cleanup">Cleanup Dirs</button>
+  <hr>
 
-<table class="table table-job-log table-striped table-gray">
-  <thead class="mono">
-    <tr class="bg-light-orange">
-      <th>ID</th>
-      <th>Name</th>
-      <th>Type</th>
-      <th>Status</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
+  <table class="table table-job-log table-striped table-gray">
+    <thead class="mono">
+      <tr class="bg-light-orange">
+        <th>ID</th>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
 
-  <tbody class="mono">
-    <%= for {id, job} <- @job_list do %>
-    <tr>
-      <td><%= inspect(id) %></td>
-      <td><%= job.ctx.name %></td>
-      <td><%= job.ctx.job_type %></td>
-      <td>
-        <%= case job.status do %>
-          <% :pending -> %>
-            <span class="dot-10 dot-y"></span>
-          <% :running -> %>
-            <span class="dot-10 dot-g"></span>
-          <% :stopped -> %>
-            <span class="dot-10 dot-r"></span>
-          <% :failed -> %>
-            <span class="dot-10 dot-r"></span>
-          <% _ -> %>
-            <span class="dot-10 dot-b"></span>
-        <% end %>
-        <%= job.status %>
-      </td>
+    <tbody class="mono">
+      <%= for {id, job} <- @job_list do %>
+      <tr>
+        <td><%= inspect(id) %></td>
+        <td><%= job.ctx.name %></td>
+        <td><%= job.ctx.job_type %></td>
+        <td>
+          <%= case job.status do %>
+            <% :pending -> %>
+              <span class="dot-10 dot-y"></span>
+            <% :running -> %>
+              <span class="dot-10 dot-g"></span>
+            <% :stopped -> %>
+              <span class="dot-10 dot-r"></span>
+            <% :failed -> %>
+              <span class="dot-10 dot-r"></span>
+            <% _ -> %>
+              <span class="dot-10 dot-b"></span>
+          <% end %>
+          <%= job.status %>
+        </td>
 
-      <td>
-      <button class="button">todo</button>
-      </td>
-    </tr>
-    <% end %>
-  </tbody>
-</table>
+        <td>
+        <button class="button">todo</button>
+        </td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
 
-<.live_error_list errors={@error_list} />
+  <.live_error_list errors={@error_list} />
+</Layouts.app>

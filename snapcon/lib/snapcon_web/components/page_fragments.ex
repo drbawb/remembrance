@@ -15,32 +15,44 @@ defmodule SnapconWeb.PageFragments do
   attr :class, :any, default: nil
   attr :rest, :global, include: ~w(href method)
   slot :inner_block, required: false
+
   def button(assigns) do
     ~H"""
     <.link class={["button", @class]} {@rest}>
-    {render_slot(@inner_block) || @caption}
+      {render_slot(@inner_block) || @caption}
     </.link>
     """
   end
 
   attr :type, :string, default: "text"
   attr :field, Phoenix.HTML.FormField, doc: "field from changeset"
+  attr :errors, :list, default: []
   attr :rest, :global
 
   slot :inner_block, required: true
+
   def input(assigns) do
     ~H"""
     <label
-      class="gr-form-label"
-      for={@field.name}>{render_slot(@inner_block)}</label>
-    <input 
-      class="gr-form-label"
-      id={@field.id} name={@field.name} type={@type} {@rest} />
+      class="gr-form-label fl-inline fl-col"
+      for={@field.name}
+    >
+      {render_slot(@inner_block)}
+
+      <div
+        :for={{msg, _opts} <- @field.errors}
+        class="fl-inline fl-col"
+      >
+        <span class="gr-form-bad-subtext" }>{msg}</span>
+      </div>
+    </label>
+    <input class="gr-form-label" id={@field.id} name={@field.name} type={@type} {@rest} />
     """
   end
 
   attr :txt, :string, default: ""
   attr :rest, :global
+
   def span(assigns) do
     ~H"""
     <span {@rest}>{@txt}</span>

@@ -1,15 +1,17 @@
 <header>
   <div class="fl-flex fl-row">
-    <.hero 
+    <.hero
       title={assigns[:hero_title] || "Remembrance"}
-      subtitle={assigns[:hero_subtitle] || "ZFS Snapshot Console"} />
+      subtitle={assigns[:hero_subtitle] || "ZFS Snapshot Console"}
+    />
 
     <div></div>
-  </div> <!-- header blocks -->
+  </div>
+  <!-- header blocks -->
 </header>
 <main>
   <div class="app-container">
     <.flash_group flash={@flash} />
-    {@inner_content}
+    {render_slot(@inner_block)}
   </div>
 </main>

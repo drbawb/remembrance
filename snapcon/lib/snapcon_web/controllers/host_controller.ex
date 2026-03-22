@@ -4,9 +4,14 @@ defmodule SnapconWeb.HostController do
   alias Snapcon.BackupServer
   alias Snapcon.Host
 
+  require Logger
+
   def index(conn, _params) do
     hosts = BackupServer.list_hosts()
-    render(conn, :index, hosts: hosts)
+
+    conn
+    |> put_hero("All Hosts", "Listing of all configured daemons.")
+    |> render(:index, hosts: hosts)
   end
 
   def new(conn, _params) do
@@ -20,18 +25,25 @@ defmodule SnapconWeb.HostController do
   def create(conn, %{"host" => host_params}) do
     case BackupServer.create_host(host_params) do
       {:ok, host} ->
+        Logger.debug("creating host :: #{inspect(host_params)}")
+
         conn
         |> put_flash(:info, "Host created successfully.")
-        |> redirect(to: ~p"/hosts/#{host}")
+        |> redirect(to: ~p"/hosts")
 
       {:error, %Ecto.Changeset{} = changeset} ->
+        Logger.error("changeset has errors :: #{inspect(changeset)}")
+
         render(conn, :new, changeset: changeset)
     end
   end
 
   def show(conn, %{"id" => id}) do
     host = BackupServer.get_host!(id)
-    render(conn, :show, host: host)
+
+    conn
+    |> put_hero(host.name, "Host configuration.")
+    |> render(:show, host: host)
   end
 
   def edit(conn, %{"id" => id}) do
@@ -65,7 +77,7 @@ defmodule SnapconWeb.HostController do
 
   defp put_hero(conn, title, subtitle \\ "") do
     conn
-    |> assign(:hero_title,    title)
+    |> assign(:hero_title, title)
     |> assign(:hero_subtitle, subtitle)
   end
 end

@@ -38,9 +38,7 @@ defmodule SnapconWeb do
 
   def controller do
     quote do
-      use Phoenix.Controller,
-        formats: [:html, :json],
-        layouts: [html: SnapconWeb.Layouts]
+      use Phoenix.Controller, formats: [:html, :json]
 
       use Gettext, backend: SnapconWeb.Gettext
 
@@ -52,8 +50,7 @@ defmodule SnapconWeb do
 
   def live_view do
     quote do
-      use Phoenix.LiveView,
-        layout: {SnapconWeb.Layouts, :app}
+      use Phoenix.LiveView
 
       import SnapconWeb.LiveFragments
 
@@ -89,11 +86,14 @@ defmodule SnapconWeb do
 
       # HTML escaping functionality
       import Phoenix.HTML
+
       # Core UI components
+      import SnapconWeb.LayoutHelpers
       import SnapconWeb.PageFragments
 
       # Shortcut for generating JS commands
       alias Phoenix.LiveView.JS
+      alias SnapconWeb.Layouts
 
       # Routes generation with the ~p sigil
       unquote(verified_routes())

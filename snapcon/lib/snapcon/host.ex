@@ -14,6 +14,7 @@ defmodule Snapcon.Host do
   def changeset(host, attrs) do
     host
     |> cast(attrs, [:name, :description, :pubkey])
+    |> unique_constraint(:name)
     |> validate_required([:name, :pubkey])
   end
 end
