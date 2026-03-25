@@ -4,12 +4,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tungstenite::{client, ClientRequestBuilder};
-use tungstenite::protocol::{frame, Message};
-use ureq;
+use tungstenite::Error as WsError;
+use tungstenite::protocol::{frame, CloseFrame, Message};
+use ureq::{self, http::Uri};
 
 use crate::config;
 
 use std::io;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 #[derive(Debug, Serialize)]
@@ -93,29 +95,66 @@ pub fn run_command_queue() -> Result<String> {
     println!("booting web socket ...");
     let cfg = config::read_cached_file()?;
 
-    let uri = cfg.uri_ws().parse()
+    let uri = cfg.uri_ws().parse::<Uri>()
        .map_err(|e| RunError::Misc(format!("invalid uri: {e:?}")))?;
+
+    // ugh; we have to do this ourselves so we can set the socket non-blocking
+    let host = uri.host().expect("no host?"); // TODO: tls
+    let port = uri.port_u16().expect("no port?"); // TODO: default 80/443
+
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()?
+        .find(|a| a.is_ipv4())
+        .expect("no socket addr");
+
+    eprintln!("tcp connect: {addr:?} for {uri:?}");
+
+    // create non-blocking stream
+    let stream = TcpStream::connect(addr)?;
 
     let ws_config = ClientRequestBuilder::new(uri)
         .with_header("x-cyrene-id", "hitomi") // TODO: hardcoded host ID
         .with_sub_protocol("x-cyrene-v1");
 
-    let (mut socket, _response) = client::connect(ws_config)?;
+    let (mut socket, _resp) = client::client(ws_config, stream.try_clone()?)
+        .map_err(|err| RunError::Misc(format!("handshake error: {err:?}")))?;
+
+    socket.flush()?;
+    stream.set_nonblocking(true)?;
     println!("connected ws client for: {}", cfg.uri_ws());
 
     'ws: loop {
-        std::thread::sleep(Duration::from_millis(1000));
+        std::thread::sleep(Duration::from_millis(100));
 
-        let msg_bytes = frame::Utf8Bytes::from_static("woah broah, woah ...");
-        socket.write(Message::Text(msg_bytes))?;
-        socket.flush()?;
-        println!("wrote message");
+        if !socket.can_read() { continue 'ws } // non-blocking
 
-        if !socket.can_read() { continue; }
+        let ws_msg_frame = match socket.read() {
+            Ok(frame) => frame,
+            Err(WsError::Io(e)) if e.kind() == io::ErrorKind::WouldBlock => { continue 'ws },
+            Err(err) => return Err(RunError::from(err)),
+        };
 
-        let message = match socket.read()? {
+        let message = match ws_msg_frame {
             Message::Text(utf8_bytes) => utf8_bytes.to_string(),
-            _ => panic!("unhandled message type ..."),
+
+            Message::Close(Some(frame)) => match reason_for_close(frame) {
+                (normal, reason) => {
+                    eprintln!("socket closed [n? {normal}]: {reason}");
+                    break 'ws;
+                },
+            },
+
+            Message::Close(None) => {
+                eprintln!("socket closed abnormally w/o reason");
+                break 'ws;
+            },
+
+            Message::Ping(_) => { continue 'ws; },
+
+            _ => {
+                println!("wtf");
+                continue 'ws;
+            },
         };
 
         println!("got: {message}");
@@ -124,6 +163,17 @@ pub fn run_command_queue() -> Result<String> {
     }
 
     Ok("command wait queue exited ...".into())
+}
+
+fn reason_for_close(reason: frame::CloseFrame) -> (bool, String) {
+    use frame::coding::CloseCode;
+    match reason {
+        CloseFrame { code: CloseCode::Normal, reason } => {
+            (true, reason.to_string())
+        },
+
+        CloseFrame { reason, .. } => (false, reason.to_string()),
+    }
 }
 
 #[allow(dead_code)] // TODO: dev sandbox ...
@@ -149,7 +199,7 @@ pub fn run_websocket_test() -> Result<String> {
     println!("message: {json_bytes}");
 
     'ws: loop {
-        std::thread::sleep_ms(100);
+        std::thread::sleep(Duration::from_millis(100));
         if !socket.can_read() { continue; }
 
         let message = match socket.read()? {
