@@ -27,6 +27,9 @@ defmodule SnapconWeb do
       import Plug.Conn
       import Phoenix.Controller
       import Phoenix.LiveView.Router
+
+      import SnapconWeb.DebugViewer,
+        only: [fetch_debug_lines: 2]
     end
   end
 
@@ -45,7 +48,7 @@ defmodule SnapconWeb do
       import Plug.Conn
 
       # import some of the layout helpers ...
-      import SnapconWeb.LayoutHelpers,
+      import SnapconWeb.DebugViewer,
         only: [add_debug_line: 2]
 
       unquote(verified_routes())

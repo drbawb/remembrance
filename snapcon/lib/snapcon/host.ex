@@ -23,7 +23,8 @@ defmodule Snapcon.Host do
 
   defp validate_ed25519_key(changeset, field) do
     with pubkey when not is_nil(pubkey) <- get_field(changeset, field),
-         {:ok, _key} <- PubKey.from_bin(pubkey, :base64) do
+         trimmed_key <- String.trim(pubkey),
+         {:ok, _key} <- PubKey.from_bin(trimmed_key, :base64) do
         changeset
       else
         err ->

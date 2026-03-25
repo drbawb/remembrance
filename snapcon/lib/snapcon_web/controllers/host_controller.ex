@@ -2,6 +2,7 @@ defmodule SnapconWeb.HostController do
   use SnapconWeb, :controller
 
   alias Snapcon.BackupServer
+  alias Snapcon.DaemonServ
   alias Snapcon.Host
 
   require Logger
@@ -85,6 +86,25 @@ defmodule SnapconWeb.HostController do
     conn
     |> put_flash(:info, "Host deleted successfully.")
     |> redirect(to: ~p"/hosts")
+  end
+
+  def ping(conn, %{"id" => id}) do
+    host = BackupServer.get_host!(id)
+    resp = DaemonServ.ping(host.name)
+
+    case resp do
+      :ok ->
+        conn
+        |> put_flash(:info, "Host pinged successfully.")
+        |> redirect(to: ~p"/hosts/#{host.id}")
+
+      err ->
+        conn
+        |> add_debug_line("[daemonserv] [err] :: #{inspect(err)}")
+        |> put_flash(:error, "Error pinging host.")
+        |> redirect(to: ~p"/hosts/#{host.id}")
+    end
+
   end
 
   defp redirect_ret(conn, return, id) do

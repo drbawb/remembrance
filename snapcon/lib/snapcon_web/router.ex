@@ -8,6 +8,7 @@ defmodule SnapconWeb.Router do
     plug :put_root_layout, html: {SnapconWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :fetch_debug_lines
   end
 
   pipeline :api do
@@ -26,7 +27,10 @@ defmodule SnapconWeb.Router do
 
     live "/", JobQueueLive
     live "/watch/:name", HostCommandLive
+    
     resources "/hosts", HostController
+    post "/hosts/:id/ping", HostController, :ping
+
   end
 
   # Other scopes may use custom stacks.

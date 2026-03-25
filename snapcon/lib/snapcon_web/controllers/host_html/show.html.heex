@@ -14,6 +14,13 @@
         <span>delete</span>
       </.button>
 
+      <.button
+        class="bg-light-orange"
+        href={~p"/hosts/#{@host.id}/ping"}
+        method="post">
+        <span>ping</span>
+      </.button>
+
       <.link href={~p"/hosts/#{@host}/edit?return=show"}>
         <button class="button">Edit Host</button>
       </.link>

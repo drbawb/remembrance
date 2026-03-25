@@ -15,7 +15,6 @@ defmodule Snapcon.Application do
       {Ecto.Migrator,
         repos: Application.fetch_env!(:zfs_snapcon, :ecto_repos),
         skip: skip_migrations?()},
-      {DNSCluster, query: Application.get_env(:zfs_snapcon, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Snapcon.PubSub},
       # Start the Finch HTTP client for sending emails
       {Finch, name: Snapcon.Finch},
@@ -25,6 +24,8 @@ defmodule Snapcon.Application do
         root_dir: "/tmp/gitfix",
         out_path: "/output",
         work_path: "/work"},
+
+      {Snapcon.DaemonServ, []},
       # Start to serve requests, typically the last entry
       SnapconWeb.Endpoint
     ]
