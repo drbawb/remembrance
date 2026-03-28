@@ -197,6 +197,8 @@ impl DaemonKernel {
             Ty::ZfsListDataset(args) => {
                 println!("zfs list :: {args:?}");
             },
+
+            msg => { eprintln!("unknown message {msg:?}") },
         }
 
         Ok(())

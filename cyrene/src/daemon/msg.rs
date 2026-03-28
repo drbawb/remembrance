@@ -2,13 +2,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventReq {
+    Ident { version: u16 },
     Ping { msg: String }, 
     ZfsListDataset(ZfsListArgs),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventRep {
-    Test,
+    Ident { version: u8, name: String },
 }
 
 #[derive(Debug, Deserialize, Serialize)]

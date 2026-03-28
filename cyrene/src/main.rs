@@ -20,6 +20,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Run(RunArgs),
+    Test,
     Genkey,
     Pubkey,
 }
@@ -42,9 +43,21 @@ fn main() -> Result<ExitCode> {
     Ok(match cli.command {
         Commands::Run(args) => entry_run(args)?,
 
+        Commands::Test => entry_test()?,
+
         Commands::Genkey => entry_genkey()?,
         Commands::Pubkey => entry_pubkey()?,
     })
+}
+
+fn entry_test() -> Result<ExitCode> {
+    use daemon::msg::{EventRep, EventReq};
+
+    let msg = EventReq::Ident { version: 0x1001 };
+    let buf = serde_json::to_string(&msg)?;
+    println!("json: {buf:?}");
+
+    Ok(ExitCode::from(0))
 }
 
 fn entry_run(args: RunArgs) -> Result<ExitCode> {
