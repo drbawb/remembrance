@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::daemon::RunError;
+use crate::daemon::err::RunError;
 use std::fs;
 
 #[derive(Debug, Deserialize, Serialize)]

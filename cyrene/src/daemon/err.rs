@@ -1,0 +1,27 @@
+use thiserror::Error;
+
+use std::io;
+use std::sync::mpsc;
+
+#[derive(Error, Debug)]
+pub enum RunError {
+    #[error("config error: {0}")]
+    Config(String),
+    
+    #[error("io error: {0}")]
+    Io(#[from] io::Error),
+   
+    #[error("json parse error: {0}")]
+    JsonEncoding(#[from] serde_json::Error),
+
+    #[error("ws api error: {0}")]
+    WebSocket(#[from] tungstenite::Error),
+
+    #[error("channel hungup unexpectedly: {0}")]
+    RxDisconnected(#[from] mpsc::TryRecvError),
+
+    #[error("{0}")]
+    Misc(String),
+}
+
+pub type Result<T> = ::std::result::Result<T, RunError>;
