@@ -1,14 +1,9 @@
 use blinkedblist::List as Blist;
-use data_encoding::BASE64;
-use ed25519_dalek::{Signer, SigningKey};
-use sha2::{Digest, Sha256};
-use ureq;
 
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config;
 use crate::daemon::ws::start_socket_thread;
 use err::*;
 use msg::*;
@@ -16,48 +11,6 @@ use msg::*;
 pub mod err;
 pub mod msg;
 mod ws;
-
-pub fn run_call_master() -> Result<String> {
-    // read initial configuration
-    let cfg = config::read_cached_file()?;
-    let url = format!("{}/test", cfg.uri_http());
-    println!("sending test message to master: {}", url);
-
-    // generate the json message
-    let test_message = TestMessage { id: 0, kind: "test", body: "hello, world." };
-
-    let json_blob = serde_json::to_vec(&test_message)
-        .map_err(|e| RunError::Misc(format!("error: {e:?}")))?;
-
-    // load our crypto primitives
-    let key_material = BASE64.decode(cfg.controller.privkey.as_bytes())
-        .expect("failed to decode key from stdin");
-    
-    let sk_bytes: &[u8; 32] = key_material.as_slice().try_into()
-        .expect(&format!("expected [32] bytes, got [{}]", key_material.len()));
-
-    let sk = SigningKey::from_bytes(sk_bytes);
-
-    // issue signed request
-    let digest = Sha256::digest(&json_blob);
-    println!("sending digest ({}): {digest:x}", json_blob.len());
-
-    let sig = sk.sign(&digest);
-    let enc = BASE64.encode(&sig.to_bytes());
-    println!("sending signature: {enc}");
-
-    let mut resp = ureq::post(url)
-        .header("content-type", "application/json")
-        .header("x-cyrene-id", "hitomi") // TODO: hardcoded host ID
-        .header("x-cyrene-sig", enc)
-        .send(&json_blob)
-        .map_err(|e| RunError::Misc(format!("req error: {e:?}")))?;
-
-    let resp_body = resp.body_mut().read_to_string()
-        .map_err(|e| RunError::Misc(format!("error: {e:?}")))?;
-
-    Ok(resp_body)
-}
 
 #[derive(Debug)]
 struct Ratchet {
@@ -110,15 +63,13 @@ pub fn run_command_queue() -> Result<String> {
 
     let dmn_init = DaemonInit::new();
 
-    let mut ratchet_evt = Ratchet::new();
-    let mut thread_evt = thread::spawn(move || {
+    let thread_evt = thread::spawn(move || {
         let mut kernel = dmn_init.kernel;
         match kernel.event_loop() {
             Err(err) => Err(RunError::Misc(format!("{err:?}"))),
             Ok(_) => Ok(()),
         }
     });
-
 
     let ws_init = ws::WsInit {
         req_tx: dmn_init.tx_req_q.clone(),
@@ -160,40 +111,18 @@ pub fn run_command_queue() -> Result<String> {
         } else {
             ratchet_ws.ratchet_down();
         }
+
+        if thread_evt.is_finished() {
+            if let Err(msg) = thread_evt.join() {
+                eprintln!("daemon exited, tearing it down: {msg:?}");
+            }
+
+            todo!("ability to restart daemon?");
+        }
     }
 
     todo!("command queue supervisor exited unexpectedly");
 }
-
-#[derive(Debug)]
-pub enum EventReq {
-    Ping { msg: String }, 
-    ZfsListDataset(ZfsListArgs),
-}
-
-#[derive(Debug)]
-pub enum EventRep {
-    Test,
-}
-
-#[derive(Debug)]
-pub struct ZfsListArgs {
-    name:      String,
-    depth:     u16,
-    ent_ty:    ZfsListType,
-    recursive: bool,
-}
-
-#[derive(Debug)]
-pub enum ZfsListType {
-    Filesystem,
-    Snapshot,
-    Volume,
-    Bookmark,
-    All,
-}
-
-pub struct CorrelationId(i64);
 
 pub struct DaemonKernel {
     req_q: Receiver<EventReq>,

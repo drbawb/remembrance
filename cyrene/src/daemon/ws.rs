@@ -1,3 +1,8 @@
+// TODO: imports
+use data_encoding::BASE64;
+use ed25519_dalek::SigningKey;
+use rand::rngs::StdRng;
+
 use tungstenite::{client, ClientRequestBuilder};
 use tungstenite::Error as WsError;
 use tungstenite::protocol::{frame, CloseFrame, Message};
