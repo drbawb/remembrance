@@ -60,17 +60,13 @@ body {
 /* forms and inputs */
 .gr-form {
 	display: grid;
-	align-items: center;
+	align-items: start;
 	gap: .25rem;
 	grid-template-columns: 1fr 2fr;
 }
 
-.gr-form-label { grid-area: "label"; }
-.gr-form-field { grid-area: "field"; }
-
 .gr-form-bad-subtext  { 
 	font-size: .7rem; 
-	height: 1rem;
 	color: #ff0000; 
 }
 

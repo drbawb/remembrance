@@ -52,9 +52,7 @@ defmodule Snapcon.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:bandit, "~> 1.5"},
-      {:eddy, "~> 1.0"},
       {:ex2ms, "~> 1.0"},
-      {:lacca, "~> 0.2"},
       {:websock_adapter, "~> 0.5"},
 
       {:depscheck, "~> 1.0", only: :dev, runtime: false},

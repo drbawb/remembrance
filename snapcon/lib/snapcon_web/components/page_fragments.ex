@@ -44,22 +44,16 @@ defmodule SnapconWeb.PageFragments do
 
   def input(assigns) do
     ~H"""
-    <label
-      class="gr-form-label fl-inline fl-col"
-      for={@field.name}
-    >
+    <label class="fl-inline fl-col" for={@field.name}>
       {render_slot(@inner_block)}
 
       <div
         :for={{msg, _opts} <- @field.errors}
-        class="fl-inline fl-col"
-      >
+        class="fl-inline fl-col">
         <span class="gr-form-bad-subtext" }>{msg}</span>
       </div>
     </label>
-    <input class="gr-form-label" 
-    id={@field.id} name={@field.name} 
-    type={@type} value={@field.value} {@rest} />
+    <input id={@field.id} name={@field.name} type={@type} value={@field.value} {@rest} />
     """
   end
 

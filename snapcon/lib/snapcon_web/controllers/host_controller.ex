@@ -74,7 +74,9 @@ defmodule SnapconWeb.HostController do
         |> redirect_ret(return, id)
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        render(conn, :edit, host: host, changeset: changeset)
+        conn
+        |> assign(:return, return)
+        |> render(:edit, host: host, changeset: changeset)
     end
   end
 

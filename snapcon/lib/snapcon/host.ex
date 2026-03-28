@@ -1,8 +1,9 @@
 defmodule Snapcon.Host do
   use Ecto.Schema
 
-  alias Eddy.PubKey
   import Ecto.Changeset
+
+  require Logger
 
   schema "hosts" do
     field :name, :string
@@ -24,11 +25,28 @@ defmodule Snapcon.Host do
   defp validate_ed25519_key(changeset, field) do
     with pubkey when not is_nil(pubkey) <- get_field(changeset, field),
          trimmed_key <- String.trim(pubkey),
-         {:ok, _key} <- PubKey.from_bin(trimmed_key, :base64) do
+         {:ok, _} <- verify_bin_length(trimmed_key) do
         changeset
       else
+        {:error, {:length, n}} ->
+          changeset |> add_error(:pubkey, "key too long (#{n} of 32)")
+
         err ->
-          changeset |> add_error(:pubkey, "could not parse pubkey", err)
+          Logger.error "unknown pubkey error #{inspect(err)}"
+          changeset |> add_error(:pubkey, "could not parse pubkey")
+    end
+  end
+
+  defp verify_bin_length(key) when is_binary(key) do
+    try do
+      key_b = Base.decode64!(key)
+
+      case byte_size(key_b) do
+        32 -> {:ok, key}
+        n  -> {:error, {:length, n}}
+      end
+    rescue
+      _ -> {:error, "error parsing ed25519 key"}
     end
   end
 end
