@@ -46,7 +46,7 @@ defmodule SnapconWeb.ApiServer do
     packet = <<header::binary-32>>
           <> <<pl_sig::binary-64, payload::binary-size(pl_length)>>
 
-    {:binary, packet}
+    {nonce, {:binary, packet}}
   end
 
   defp verify_signed(msg) do
@@ -78,7 +78,7 @@ defmodule SnapconWeb.ApiServer do
     pl_msg = <<nonce::binary-16, ttl::unsigned-64, pl_digest::binary-32>>
 
     case :crypto.verify(:eddsa, :none, pl_msg, sig, [pl_key, :ed25519]) do
-      true -> {:ok, Jason.decode!(payload)}
+      true -> {:ok, {nonce, Jason.decode!(payload)}}
       false -> {:error, :signature_invalid}
     end
   end
@@ -88,7 +88,7 @@ defmodule SnapconWeb.ApiServer do
   def init(opts) do
     Logger.debug "init called :: #{inspect(opts)}"
     host_name = opts[:id]
-    state = %{name: host_name}
+    state = %{name: host_name, pending: %{}}
 
     reply = DaemonServ.add_host(host_name, self())
     Logger.debug "ws [registration] :: #{inspect(reply)}"
@@ -96,7 +96,8 @@ defmodule SnapconWeb.ApiServer do
     case reply do
       :ok ->
         Process.send_after(self(), :keepalive, 10_000)
-        {:push, push_signed(msg_authenticate()), state}
+        {_nonce, message} = push_signed(msg_authenticate())
+        {:push, message, state}
 
       {:error, :already_exists} ->
         term_reason = {:unauthorized, reply}
@@ -118,11 +119,17 @@ defmodule SnapconWeb.ApiServer do
   end
 
   def handle_in({text, _opts}, state) do
-    Logger.warning "incoming: #{inspect(text)}"
-    {:ok, msg} = verify_signed(text)
-    Logger.info "decoded and verified: #{inspect(msg)}"
+    {:ok, {nonce, msg}} = verify_signed(text)
+    Logger.info "decoded and verified message #{byte_size(text)}b"
+    Logger.info "verified nocne: #{inspect(nonce)}"
 
-    {:ok, state}
+    case pop_in(state, [:pending, nonce]) do
+      {nil, state} -> {:ok, state}
+      {ref, state} ->
+        Logger.info "nonce matches ref: #{inspect(ref)}"
+        GenServer.reply(ref, {:ok, msg})
+        {:ok, state}
+    end
   end
 
   def handle_info(:keepalive, state) do
@@ -132,7 +139,19 @@ defmodule SnapconWeb.ApiServer do
 
   def handle_info(%{"ping" => need_reply}, state) do
     Logger.debug "got daemon ping request :: #{need_reply}"
-    {:push, push_signed(%{"Ping" => %{"msg" => "you are being summoned, do not resist ..."}}), state}
+    {_nonce, message} = push_signed(%{"Ping" => %{"msg" => "you are being summoned, do not resist ..."}})
+    {:push, message, state}
+  end
+
+  def handle_info({:list_datasets, from}, state) do
+    Logger.debug "got daemon list request"
+    message = %{"ZfsListDataset" => %{ent_ty: "All", recursive: true}}
+    {nonce, message} = push_signed(message)
+    
+    state = put_in(state, [:pending, nonce], from)
+    Logger.debug "pending :: #{inspect(state.pending)}"
+
+    {:push, message, state}
   end
 
   def handle_info(info, state) do
@@ -154,6 +173,9 @@ defmodule SnapconWeb.ApiServer do
   end
 
   def terminate({:error, {:unauthorized, _}}, _state) do
+    # TODO: send the remove request; but have dserv verify that
+    # the socket which is removing the peer is the same socket
+    # which created it ...
     Logger.warning "disconnect from unauthenticated client"
   end
 

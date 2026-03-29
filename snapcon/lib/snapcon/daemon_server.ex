@@ -42,6 +42,33 @@ defmodule Snapcon.DaemonServ do
     GenServer.call(__MODULE__, {:ping, name})
   end
 
+  def list_datasets(name) do
+    GenServer.call(__MODULE__, {:list_ds, name})
+  end
+
+  def handle_call({:list_ds, name}, from, state) do
+    Logger.debug "dserv [cmd]   :: list host [#{name}] via #{inspect(from)}"
+    Logger.debug "dserv [state] :: #{inspect(state)}"
+
+    query = from h in Host, where: h.name == ^name
+    host = Repo.one(query)
+
+    cond do
+      host == nil ->
+        {:reply, {:error, :unregistered_host}, state}
+
+      Map.get(state.sockets, name) == nil ->
+        {:reply, {:error, :host_offline}, state}
+
+      true ->
+        Logger.debug "sending command to socket"
+        hostsock = Map.get(state.sockets, name)
+        send(hostsock, {:list_datasets, from})
+
+        {:noreply, state} # reply comes from websocket ...
+    end
+  end
+
   # Callback Hell
 
   def handle_call({:add_host, name, socket}, from, state) do

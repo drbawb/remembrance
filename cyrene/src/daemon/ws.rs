@@ -1,8 +1,8 @@
 use data_encoding::BASE64;
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 use ed25519_dalek::{SigningKey, Signer};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-
 use tungstenite::{client, ClientRequestBuilder};
 use tungstenite::Error as WsError;
 use tungstenite::protocol::{frame, CloseFrame, Message};
@@ -10,7 +10,7 @@ use ureq::{self, http::Uri};
 
 use crate::config::{self, DaemonConfig};
 use super::err::*;
-use super::{EventReq, EventRep};
+use super::{EventReq, EventRep, Packet};
 
 use std::io::{self, Cursor, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -20,12 +20,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[allow(dead_code)]
 pub struct WsInit {
     pub name: String,
-    pub req_tx: SyncSender<EventReq>,
-    pub rep_tx: SyncSender<EventRep>,
-    pub rep_rx: Receiver<EventRep>,
+    pub req_tx: SyncSender<Packet<EventReq>>,
+    pub rep_tx: SyncSender<Packet<EventRep>>,
+    pub rep_rx: Receiver<Packet<EventRep>>,
 }
 
-pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
+pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<Packet<EventRep>>> {
     println!("booting web socket ...");
     let cfg = config::read_cached_file()?;
 
@@ -63,9 +63,7 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
         // TODO: secondary drain loop
         // drain outgoing submission queue
         if let Ok(event_rep) = comms.rep_rx.try_recv() {
-            let json_str = serde_json::to_string(&event_rep)?;
-            println!("encoding & signing ({}) {json_str}", json_str.len());
-            let output = encode_packet(&cfg, &json_str)?;
+            let output = encode_packet(&cfg, event_rep)?;
             socket.write(Message::binary(output))?;
             socket.flush()?;
         }
@@ -94,10 +92,11 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
             Message::Ping(_) => { continue 'ws; },
 
             Message::Binary(bytes) => {
-                let json_str = decode_packet(&cfg, &bytes)?;
+                let (nonce, ttl, json_str) = decode_packet(&cfg, &bytes)?;
                 let app_msg = serde_json::from_str(&json_str)?;
+                let packet = Packet::from_parts(nonce, ttl, app_msg);
 
-                comms.req_tx.send(app_msg)
+                comms.req_tx.send(packet)
                     .inspect_err(|err| eprintln!("{err:?}"))
                     .map_err(|_| { RunError::Misc("ws->daemon submission error".into()) })?;
 
@@ -111,7 +110,7 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
     Ok(comms.rep_rx)
 }
 
-fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<String> {
+fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<(u128, u64, String)> {
     use byteorder::{NetworkEndian as NE, ReadBytesExt, WriteBytesExt};
 
     // TODO: cache base 64 decode result
@@ -202,12 +201,14 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<String> {
     let mut output = String::new(); rdr.set_position(96);
     rdr.read_to_string(&mut output)?;
 
-    Ok(output) // TODO: what do we return?
+    Ok((nonce, ttl, output))
 }
 
-fn encode_packet(cfg: &DaemonConfig, msg: &str) -> Result<Vec<u8>> {
-    use byteorder::{NetworkEndian as NE, ReadBytesExt, WriteBytesExt};
+fn encode_packet<T: Serialize>(cfg: &DaemonConfig, pkt: Packet<T>) -> Result<Vec<u8>> {
+    use byteorder::{NetworkEndian as NE, WriteBytesExt};
     
+    let Packet { nonce, ttl, msg } = pkt;
+    let msg = serde_json::to_string(&msg)?;
     assert!(msg.len() <= u16::MAX as usize);
 
     // TODO: cache base 64 decode result
@@ -253,14 +254,7 @@ fn encode_packet(cfg: &DaemonConfig, msg: &str) -> Result<Vec<u8>> {
     // create signature
     let mut sig_buf = Cursor::new(Vec::with_capacity(56));
 
-    let wall_t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time moving backwards? that's bad ...")
-        .as_secs();
-
-    let nonce = rand::random();
-    let ttl = wall_t + 30;
-    sig_buf.write_u128::<NE>(nonce)?;
+    sig_buf.write_u128::<NE>(nonce.0)?;
     sig_buf.write_u64::<NE>(ttl)?;
     sig_buf.write(&pl_digest[..])?;
 
@@ -271,7 +265,7 @@ fn encode_packet(cfg: &DaemonConfig, msg: &str) -> Result<Vec<u8>> {
 
     // assemble final packet
     let mut packet = Cursor::new(vec![]);
-    packet.write_u128::<NE>(nonce)?;
+    packet.write_u128::<NE>(nonce.0)?;
     packet.write_u64::<NE>(ttl)?;
     packet.write_u16::<NE>(64)?;
     packet.write_u16::<NE>(msg.len() as u16)?;

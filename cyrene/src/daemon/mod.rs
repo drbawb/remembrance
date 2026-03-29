@@ -1,5 +1,6 @@
 use blinkedblist::List as Blist;
 
+use std::io::{Read};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -128,10 +129,9 @@ pub fn run_command_queue() -> Result<String> {
     todo!("command queue supervisor exited unexpectedly");
 }
 
-#[allow(dead_code)]
 pub struct DaemonKernel {
-    req_q: Receiver<EventReq>,
-    sub_q: SyncSender<EventRep>,
+    req_q: Receiver<Packet<EventReq>>,
+    sub_q: SyncSender<Packet<EventRep>>,
 
     pending: Blist<CorrelationId>,
 }
@@ -139,9 +139,9 @@ pub struct DaemonKernel {
 pub struct DaemonInit {
     kernel: DaemonKernel,
 
-    tx_req_q: SyncSender<EventReq>,
-    tx_rep_q: SyncSender<EventRep>,
-    rx_sub_q: Receiver<EventRep>,
+    tx_req_q: SyncSender<Packet<EventReq>>,
+    tx_rep_q: SyncSender<Packet<EventRep>>,
+    rx_sub_q: Receiver<Packet<EventRep>>,
 }
 
 impl DaemonInit {
@@ -196,14 +196,70 @@ impl DaemonKernel {
         Ok(())
     }
 
-    fn process_message(&mut self, event: EventReq) -> Result<()> {
+    fn process_message(&mut self, event: Packet<EventReq>) -> Result<()> {
         use EventReq as Ty;
+        use std::process::{Command, Stdio};
 
-        match event {
+        let Packet { nonce, ttl, msg } = event;
+        println!("got req ({nonce:?}, {ttl})");
+
+        match msg {
             Ty::Ping { msg } => { println!("ping: {msg}") },
 
             Ty::ZfsListDataset(args) => {
                 println!("zfs list :: {args:?}");
+                let mut cmd = Command::new("zfs"); 
+
+                cmd.arg("list")
+                   .arg("-p")
+                   .arg("-Ho")
+                   .arg("name,avail,used,usedsnap");
+
+                // TODO: cleaner way to do this?
+                cmd.stdin(Stdio::piped());
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+
+                // set our conditional flags
+                if args.recursive { cmd.arg("-r"); }
+                if let Some(name) = args.name { cmd.arg(name); }
+                if let Some(depth) = args.depth {
+                    cmd.arg("-d"); cmd.arg(format!("{depth}"));
+                }
+
+                // spawn subproc
+                let mut subproc = cmd.spawn()?;
+                let status = subproc.wait()?;
+
+                if !status.success() {
+                    eprintln!("zfs list failed");
+                    return Ok(())
+                }
+
+                if let None = subproc.stdout {
+                    eprintln!("no output from zfs?");
+                    return Ok(())
+                }
+
+                // assume it came back as a bignasty string
+                let mut buf = String::new();
+
+                let buf_n = subproc.stdout
+                    .expect("subproc stdout not available")
+                    .read_to_string(&mut buf)?;
+
+                println!("({buf_n}b) response from ZFS");
+                println!("acknowledging {nonce:?}");
+                let new_ttl = Packet::calc_ttl(30);
+                let list = buf.lines()
+                    .map(|line| line.to_owned())
+                    .collect::<Vec<_>>();
+
+                let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsList { list });
+
+                self.sub_q.send(out_p)
+                    .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
+                    .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
             },
 
             Ty::Ident { version } => {
@@ -214,7 +270,9 @@ impl DaemonKernel {
 
                 println!("request to authenticate processed ;; starting v{version}");
 
-                self.sub_q.send(EventRep::Ident { version, name: "hitomi".into() })
+                let event = EventRep::Ident { version, name: "hitomi".into() };
+
+                self.sub_q.send(msg::build_packet(event))
                     .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
                     .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
             },
@@ -222,4 +280,5 @@ impl DaemonKernel {
 
         Ok(())
     }
+
 }

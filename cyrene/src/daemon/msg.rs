@@ -1,5 +1,35 @@
 use serde::{Deserialize, Serialize};
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Packet<T> {
+    pub nonce: CorrelationId,
+    pub ttl: u64,
+    pub msg: T,
+}
+
+impl Packet<()> {
+    // TODO: wow I hate this, T=() lmao ...
+    // This is here so that this freestanding function can be called
+    // even if you don't have an instantiation of a packet ...
+    pub fn calc_ttl(seconds: u64) -> u64 {
+        let wall_t = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time moving backwards? that's bad ...")
+            .as_secs();
+
+        wall_t + seconds
+    }
+}
+
+impl<T> Packet<T> {
+    pub fn from_parts(nonce: u128, ttl: u64, msg: T) -> Self {
+        let nonce = CorrelationId(nonce);
+        Packet { nonce, ttl, msg }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventReq {
     Ident { version: u16 },
@@ -10,14 +40,15 @@ pub enum EventReq {
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventRep {
     Ident { version: u16, name: String },
+    ZfsList { list: Vec<String> },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ZfsListArgs {
-    name:      String,
-    depth:     u16,
-    ent_ty:    ZfsListType,
-    recursive: bool,
+    pub name:      Option<String>,
+    pub depth:     Option<u16>,
+    pub ent_ty:    ZfsListType,
+    pub recursive: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -29,6 +60,19 @@ pub enum ZfsListType {
     All,
 }
 
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct CorrelationId(i64);
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub struct CorrelationId(pub u128);
+
+
+pub fn build_packet(msg: EventRep) -> Packet<EventRep> {
+    let nonce = CorrelationId(rand::random());
+
+    let wall_t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time moving backwards? that's bad ...")
+        .as_secs();
+
+    let ttl = wall_t + 30;
+
+    Packet { nonce, msg, ttl }
+}

@@ -4,6 +4,8 @@ use data_encoding::BASE64;
 use ed25519_dalek::SigningKey;
 use rand::rngs::StdRng;
 
+use daemon::msg::*;
+
 use std::io;
 use std::process::ExitCode;
 
@@ -53,7 +55,14 @@ fn main() -> Result<ExitCode> {
 fn entry_test() -> Result<ExitCode> {
     use daemon::msg::EventReq;
 
-    let msg = EventReq::Ident { version: 0x1001 };
+    // let msg = EventReq::Ident { version: 0x1001 };
+    let msg = EventReq::ZfsListDataset(ZfsListArgs {
+        name: None,
+        depth: None,
+        ent_ty: ZfsListType::All,
+        recursive: true,
+    });
+
     let buf = serde_json::to_string(&msg)?;
     println!("json: {buf:?}");
 
