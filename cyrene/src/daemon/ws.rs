@@ -1,3 +1,4 @@
+use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE64;
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 use ed25519_dalek::{SigningKey, Signer};
@@ -14,13 +15,12 @@ use super::{EventReq, EventRep, Packet};
 
 use std::io::{self, Cursor, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct WsInit {
     pub name: String,
-    pub req_tx: SyncSender<Packet<EventReq>>,
-    pub rep_tx: SyncSender<Packet<EventRep>>,
+    pub req_tx: Sender<Packet<EventReq>>,
+    pub rep_tx: Sender<Packet<EventRep>>,
     pub rep_rx: Receiver<Packet<EventRep>>,
 }
 
@@ -111,6 +111,7 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<Packet<EventRep>>> 
     Ok(comms.rep_rx)
 }
 
+#[tracing::instrument]
 fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<(u128, u64, String)> {
     use byteorder::{NetworkEndian as NE, ReadBytesExt, WriteBytesExt};
 
@@ -150,7 +151,6 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<(u128, u64, String)> 
     }
 
     // check packet signature
-    println!("length (buf: {}, sig: {sig_l}, payload: {pay_l})", buf.len());
     let mut sig_buf = [0u8; 64];
     rdr.read_exact(&mut sig_buf[..])?;
 
@@ -205,10 +205,12 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<(u128, u64, String)> 
     Ok((nonce, ttl, output))
 }
 
-fn encode_packet<T: Serialize>(cfg: &DaemonConfig, pkt: Packet<T>) -> Result<Vec<u8>> {
+
+#[tracing::instrument]
+fn encode_packet<T: std::fmt::Debug + Serialize>(cfg: &DaemonConfig, pkt: Packet<T>) -> Result<Vec<u8>> {
     use byteorder::{NetworkEndian as NE, WriteBytesExt};
     
-    let Packet { nonce, ttl, msg } = pkt;
+    let Packet { nonce, ttl, msg, len: _ } = pkt;
     let msg = serde_json::to_string(&msg)?;
     assert!(msg.len() <= u16::MAX as usize);
 

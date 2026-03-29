@@ -1,12 +1,31 @@
 use serde::{Deserialize, Serialize};
 
+use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Packet<T> {
     pub nonce: CorrelationId,
     pub ttl: u64,
+    pub len: Option<usize>,
     pub msg: T,
+}
+
+
+impl<T: fmt::Debug> fmt::Debug for Packet<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ttl {}", self.ttl)?;
+
+        match self.len {
+            Some(len) => write!(f, " len {len}")?,
+            None => write!(f, " len ?")?,
+        };
+
+        write!(f, " nonce {:16x}\n", self.nonce.0)?;
+        write!(f, "{:?}", self.msg)?;
+
+        Ok(())
+    }
 }
 
 impl Packet<()> {
@@ -26,7 +45,7 @@ impl Packet<()> {
 impl<T> Packet<T> {
     pub fn from_parts(nonce: u128, ttl: u64, msg: T) -> Self {
         let nonce = CorrelationId(nonce);
-        Packet { nonce, ttl, msg }
+        Packet { nonce, ttl, msg, len: None }
     }
 }
 
@@ -74,5 +93,5 @@ pub fn build_packet(msg: EventRep) -> Packet<EventRep> {
 
     let ttl = wall_t + 30;
 
-    Packet { nonce, msg, ttl }
+    Packet { nonce, msg, ttl, len: None }
 }

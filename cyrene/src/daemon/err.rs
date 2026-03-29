@@ -1,7 +1,6 @@
 use thiserror::Error;
 
 use std::io;
-use std::sync::mpsc;
 
 #[derive(Error, Debug)]
 pub enum RunError {
@@ -18,7 +17,7 @@ pub enum RunError {
     WebSocket(#[from] tungstenite::Error),
 
     #[error("channel hungup unexpectedly: {0}")]
-    RxDisconnected(#[from] mpsc::TryRecvError),
+    RxDisconnected(String),
 
     #[error("{0}")]
     Misc(String),

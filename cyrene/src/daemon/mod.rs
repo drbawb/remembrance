@@ -1,8 +1,8 @@
 use blinkedblist::List as Blist;
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use std::io::{Read};
-use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::daemon::ws::start_socket_thread;
@@ -129,28 +129,34 @@ pub fn run_command_queue() -> Result<String> {
 
 pub struct DaemonKernel {
     req_q: Receiver<Packet<EventReq>>,
-    sub_q: SyncSender<Packet<EventRep>>,
+    sub_q: Sender<Packet<EventRep>>,
 
     pending: Blist<CorrelationId>,
+
+    tx_wkr_q: Sender<Packet<EventReq>>,
+    rx_wkr_q: Receiver<Packet<EventReq>>,
 }
 
 pub struct DaemonInit {
     kernel: DaemonKernel,
 
-    tx_req_q: SyncSender<Packet<EventReq>>,
-    tx_rep_q: SyncSender<Packet<EventRep>>,
+    tx_req_q: Sender<Packet<EventReq>>,
+    tx_rep_q: Sender<Packet<EventRep>>,
     rx_sub_q: Receiver<Packet<EventRep>>,
 }
 
 impl DaemonInit {
     pub fn new() -> DaemonInit {
-        let (tx_req_q, rx_req_q) = mpsc::sync_channel(8);
-        let (tx_rep_q, rx_rep_q) = mpsc::sync_channel(1024);
+        let (tx_req_q, rx_req_q) = bounded(8);
+        let (tx_rep_q, rx_rep_q) = bounded(1024);
+        let (tx_wkr_q, rx_wkr_q) = bounded(32);
 
         let fresh_instance = DaemonKernel {
             req_q: rx_req_q,
             sub_q: tx_rep_q.clone(),
             pending: Blist::new(),
+
+            tx_wkr_q, rx_wkr_q,
         };
 
 
@@ -166,28 +172,136 @@ impl DaemonInit {
 impl DaemonKernel {
     pub fn event_loop(&mut self) -> Result<()> {
         println!("daemon event loop running ...");
+        let fr_budget_ms = Duration::from_millis(1000 / 100);
+
+        let mut workers = vec![];
+        let mut next_monitor_t = Instant::now() + Duration::from_secs(10);
+
+        for i in 0..4 {
+            let worker_rx = self.rx_wkr_q.clone();
+            let worker_tx = self.sub_q.clone();
+            let worker_h = thread::spawn(move || {
+                println!("starting worker: {i}");
+
+                if let Err(msg) = DaemonKernel::sub_task_loop(worker_rx, worker_tx) {
+                    eprintln!("sub task loop exited with err: {msg:?}");
+                }
+
+                eprintln!("warning worker has exited: {i}");
+            });
+
+            workers.push(worker_h);
+        }
 
         loop {
-            let mut fr_start = Instant::now();
-            let mut fr_budget_ms = Duration::from_millis(1000 / 100);
-
+            let fr_beg = Instant::now();
             self.drain_requests()?;
-            fr_budget_ms = fr_budget_ms.saturating_sub(fr_start.elapsed());
-            fr_start = Instant::now();
 
-            if fr_budget_ms <= Duration::ZERO { eprintln!("dropped frame"); }
-            thread::sleep(fr_budget_ms);
+            if next_monitor_t > fr_beg {
+                next_monitor_t = Instant::now() + Duration::from_secs(10);
+                self.sub_task_monitor(&mut workers)?
+            }
+
+            let fr_end_t = fr_beg.elapsed();
+
+            if fr_end_t > fr_budget_ms {
+                eprintln!("event loop blocked {}ms", fr_end_t.as_millis()); 
+            }
+
+            thread::sleep(fr_budget_ms.saturating_sub(fr_end_t));
+        }
+    }
+
+    fn sub_task_monitor(&self, threads: &mut [JoinHandle<()>]) -> Result<()> {
+        for thread in threads {
+            if thread.is_finished() { // TODO: don't panic :)
+                return Err(RunError::RxDisconnected("sub task".into()))
+            }
+        }
+
+        Ok(())
+    }
+
+    fn sub_task_loop(task_rx: Receiver<Packet<EventReq>>, sub_q: Sender<Packet<EventRep>>) -> Result<()> {
+        use EventReq as Ty;
+        use std::process::{Command, Stdio};
+
+        loop {
+            let packet = task_rx.recv().expect("failed to work steal request");
+            println!("daemon [wkr] [pkt]: {packet:?}");
+            let Packet { nonce, msg, .. } = packet;
+
+            match msg {
+                Ty::ZfsListDataset(args) => {
+                    println!("zfs list :: {args:?}");
+                    let mut cmd = Command::new("zfs"); 
+
+                    cmd.arg("list")
+                       .arg("-p")
+                       .arg("-Ho")
+                       .arg("name,avail,used,usedsnap");
+
+                    // TODO: cleaner way to do this?
+                    cmd.stdin(Stdio::piped());
+                    cmd.stdout(Stdio::piped());
+                    cmd.stderr(Stdio::piped());
+
+                    // set our conditional flags
+                    if args.recursive { cmd.arg("-r"); }
+                    if let Some(name) = args.name { cmd.arg(name); }
+                    if let Some(depth) = args.depth {
+                        cmd.arg("-d"); cmd.arg(format!("{depth}"));
+                    }
+
+                    // spawn subproc
+                    let mut subproc = cmd.spawn()?;
+                    let status = subproc.wait()?;
+
+                    if !status.success() {
+                        eprintln!("zfs list failed");
+                        return Ok(())
+                    }
+
+                    if let None = subproc.stdout {
+                        eprintln!("no output from zfs?");
+                        return Ok(())
+                    }
+
+                    // assume it came back as a bignasty string
+                    let mut buf = String::new();
+
+                    let buf_n = subproc.stdout
+                                       .expect("subproc stdout not available")
+                                       .read_to_string(&mut buf)?;
+
+                    println!("({buf_n}b) response from ZFS");
+                    println!("acknowledging {nonce:?}");
+                    let new_ttl = Packet::calc_ttl(30);
+
+                    let list = buf.lines()
+                                  .map(|line| line.to_owned())
+                                  .collect::<Vec<_>>();
+
+                    let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsList { list });
+
+                    sub_q.send(out_p)
+                         .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
+                         .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
+                },
+
+                _ => { eprintln!("worker should not have been sent {msg:?}"); }
+            }
         }
     }
 
     fn drain_requests(&mut self) -> Result<()> {
-        use mpsc::TryRecvError;
+        use crossbeam_channel::TryRecvError;
 
         loop {
             match self.req_q.try_recv() {
                 Ok(message) => { self.process_message(message)? },
                 Err(TryRecvError::Empty) => { break },
-                Err(error) => return Err(error.into()),
+                Err(_) => return Err(RunError::RxDisconnected("daemon req drain lost".into())),
             }
         }
 
@@ -196,71 +310,14 @@ impl DaemonKernel {
 
     fn process_message(&mut self, event: Packet<EventReq>) -> Result<()> {
         use EventReq as Ty;
-        use std::process::{Command, Stdio};
 
-        let Packet { nonce, ttl, msg } = event;
-        println!("got req ({nonce:?}, {ttl})");
+        println!("daemon [ in] [pkt]: {event:?}");
+        let Packet { ref msg, .. } = event;
 
         match msg {
             Ty::Ping { msg } => { println!("ping: {msg}") },
 
-            Ty::ZfsListDataset(args) => {
-                println!("zfs list :: {args:?}");
-                let mut cmd = Command::new("zfs"); 
-
-                cmd.arg("list")
-                   .arg("-p")
-                   .arg("-Ho")
-                   .arg("name,avail,used,usedsnap");
-
-                // TODO: cleaner way to do this?
-                cmd.stdin(Stdio::piped());
-                cmd.stdout(Stdio::piped());
-                cmd.stderr(Stdio::piped());
-
-                // set our conditional flags
-                if args.recursive { cmd.arg("-r"); }
-                if let Some(name) = args.name { cmd.arg(name); }
-                if let Some(depth) = args.depth {
-                    cmd.arg("-d"); cmd.arg(format!("{depth}"));
-                }
-
-                // spawn subproc
-                let mut subproc = cmd.spawn()?;
-                let status = subproc.wait()?;
-
-                if !status.success() {
-                    eprintln!("zfs list failed");
-                    return Ok(())
-                }
-
-                if let None = subproc.stdout {
-                    eprintln!("no output from zfs?");
-                    return Ok(())
-                }
-
-                // assume it came back as a bignasty string
-                let mut buf = String::new();
-
-                let buf_n = subproc.stdout
-                    .expect("subproc stdout not available")
-                    .read_to_string(&mut buf)?;
-
-                println!("({buf_n}b) response from ZFS");
-                println!("acknowledging {nonce:?}");
-                let new_ttl = Packet::calc_ttl(30);
-                let list = buf.lines()
-                    .map(|line| line.to_owned())
-                    .collect::<Vec<_>>();
-
-                let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsList { list });
-
-                self.sub_q.send(out_p)
-                    .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
-                    .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
-            },
-
-            Ty::Ident { version } => {
+            &Ty::Ident { version } => {
                 if version != 0x1001 {
                     eprintln!("ident request for unknown version {:04x}", version);
                     return Err(RunError::Misc("ident version failure".into()));
@@ -269,11 +326,19 @@ impl DaemonKernel {
                 println!("request to authenticate processed ;; starting v{version}");
 
                 let event = EventRep::Ident { version, name: "hitomi".into() };
+                let out_p = msg::build_packet(event);
+                println!("daemon [out] [pkt]: {out_p:?}");
 
-                self.sub_q.send(msg::build_packet(event))
-                    .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
-                    .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
+                self.sub_q
+                    .send(out_p)
+                    .map_err(|_| RunError::RxDisconnected("dmn->ws submission queue".into()))?;
             },
+
+            Ty::ZfsListDataset(..) => {
+                self.tx_wkr_q
+                    .send(event)
+                    .map_err(|_| RunError::RxDisconnected("dmn->wkr task queue".into()))?;
+            }, 
         }
 
         Ok(())
