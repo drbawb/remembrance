@@ -6,20 +6,18 @@ defmodule SnapconWeb.ApiServer do
   require Logger
 
   defp push_signed(msg, flags \\ 0x0000) do
+    # generate header state ...
     nonce = :crypto.strong_rand_bytes(16)
     ttl = System.os_time(:second) + 30
     payload = Jason.encode!(msg)
     pl_length = byte_size(payload)
+
     Logger.debug("len = #{pl_length} => #{inspect(payload)}")
    
     # prepare the message header
-    header = <<
-      nonce::binary-16,
-      ttl::unsigned-64,
-      64::unsigned-16,
-      pl_length::unsigned-16,
-      flags::unsigned-32,
-    >>
+    header = <<nonce::binary-16, ttl::unsigned-64>>
+          <> <<64::unsigned-16, pl_length::unsigned-16>>
+          <> <<flags::unsigned-32>>
 
     # digest & sign the payload
     pl_key = Base.decode64!(@priv)
@@ -28,14 +26,9 @@ defmodule SnapconWeb.ApiServer do
       |> :crypto.hash_update(payload)
       |> :crypto.hash_final()
 
-    Logger.debug "digest => #{inspect(pl_digest)}"
+    Logger.debug "{:digest, :sha256, #{inspect(pl_digest)}}"
 
-    pl_msg = <<
-      nonce::binary-16,
-      ttl::unsigned-64,
-      pl_digest::binary-32,
-    >>
-
+    pl_msg = <<nonce::binary-16,ttl::unsigned-64,pl_digest::binary-32>>
     pl_sig = :crypto.sign(:eddsa, :none, pl_msg, [pl_key, :ed25519])
 
     if 64 != byte_size(pl_sig) do
@@ -50,11 +43,8 @@ defmodule SnapconWeb.ApiServer do
     Logger.debug "packet #{debug_lens}: #{inspect(pl_sig)}"
 
     # output the packet
-    packet = <<
-      header::binary-size(32),
-      pl_sig::binary-size(64),
-      payload::binary-size(pl_length),
-    >>
+    packet = <<header::binary-size(32)>>
+          <> <<pl_sig::binary-size(64), payload::binary-size(pl_length)>>
 
     {:binary, packet}
   end
@@ -94,6 +84,7 @@ defmodule SnapconWeb.ApiServer do
   end
 
   def handle_in({text, _opts}, state) do
+    Logger.warning "incoming: #{inspect(text)}"
     {:push, {:text, text <> " ... lmao"}, state}
   end
 

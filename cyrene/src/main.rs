@@ -51,7 +51,7 @@ fn main() -> Result<ExitCode> {
 }
 
 fn entry_test() -> Result<ExitCode> {
-    use daemon::msg::{EventRep, EventReq};
+    use daemon::msg::EventReq;
 
     let msg = EventReq::Ident { version: 0x1001 };
     let buf = serde_json::to_string(&msg)?;

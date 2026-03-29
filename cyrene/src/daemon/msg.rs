@@ -29,5 +29,6 @@ pub enum ZfsListType {
     All,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct CorrelationId(i64);

@@ -128,6 +128,7 @@ pub fn run_command_queue() -> Result<String> {
     todo!("command queue supervisor exited unexpectedly");
 }
 
+#[allow(dead_code)]
 pub struct DaemonKernel {
     req_q: Receiver<EventReq>,
     sub_q: SyncSender<EventRep>,
@@ -216,8 +217,6 @@ impl DaemonKernel {
                     .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
                     .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
             },
-
-            msg => { eprintln!("unknown message {msg:?}") },
         }
 
         Ok(())

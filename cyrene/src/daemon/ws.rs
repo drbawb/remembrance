@@ -1,8 +1,7 @@
 // TODO: imports
 use data_encoding::BASE64;
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
-use ed25519_dalek::{SigningKey, Signer};
-use rand::rngs::StdRng;
+// use ed25519_dalek::{SigningKey, Signer};
 use sha2::{Digest, Sha256};
 
 use tungstenite::{client, ClientRequestBuilder};
@@ -19,30 +18,12 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[allow(dead_code)]
 pub struct WsInit {
     pub name: String,
     pub req_tx: SyncSender<EventReq>,
     pub rep_tx: SyncSender<EventRep>,
     pub rep_rx: Receiver<EventRep>,
-}
-
-pub struct WsState {
-    is_init: bool,
-    rep_tx: SyncSender<EventRep>,
-}
-
-impl WsState {
-    pub fn new(rep_tx: SyncSender<EventRep>) -> Self {
-        Self { is_init: false, rep_tx }
-    }
-
-    pub fn submit_message(&self, cfg: &DaemonConfig, msg: EventRep) -> Result<()> {
-        if !self.is_init {
-
-        }
-
-        Ok(())
-    }
 }
 
 pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
@@ -77,11 +58,8 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
     stream.set_nonblocking(true)?;
     println!("connected ws client for: {}", cfg.uri_ws());
 
-    // set up websocket state
-    let mut state = WsState::new(comms.rep_tx.clone());
-
     'ws: loop {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(10));
 
         // TODO: secondary drain loop
         // drain outgoing submission queue
@@ -98,9 +76,7 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
             Err(err) => return Err(RunError::from(err)),
         };
 
-        let message = match ws_msg_frame {
-            Message::Text(utf8_bytes) => utf8_bytes.to_string(),
-
+        match ws_msg_frame {
             Message::Close(Some(frame)) => match reason_for_close(frame) {
                 (normal, reason) => {
                     eprintln!("socket closed [n? {normal}]: {reason}");
@@ -116,8 +92,6 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
             Message::Ping(_) => { continue 'ws; },
 
             Message::Binary(bytes) => {
-                println!("read {} byte packet", bytes.len());
-
                 let json_str = decode_packet(&cfg, &bytes)?;
                 let app_msg = serde_json::from_str(&json_str)?;
 
@@ -129,16 +103,7 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
             },
 
             _ => { eprintln!("unhandled ws frame"); continue 'ws; },
-        };
-
-        // eprintln!("ws debug: {message}");
-        if message.contains("summoned") {
-            if let Err(msg) = comms.req_tx.send(EventReq::Ping { msg: message }) {
-                eprintln!("ws -x-> daemon: {msg:?}");
-            }
         }
-
-        if false { break 'ws }
     }
 
     Ok(comms.rep_rx)
@@ -183,7 +148,7 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<String> {
     }
 
     // check packet signature
-    println!("reasonable-ish packet: {sig_l}/{pay_l}");
+    println!("length (buf: {}, sig: {sig_l}, payload: {pay_l})", buf.len());
     let mut sig_buf = [0u8; 64];
     rdr.read_exact(&mut sig_buf[..])?;
 
@@ -194,7 +159,6 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<String> {
 
     // hash fixed blocks of payload until we can't
     while total > 32 {
-        eprintln!("read >32");
         let mut buf = [0u8; 32];
         rdr.read_exact(&mut buf)?; total -= 32;
         hasher.update(&buf[..]);
@@ -202,7 +166,6 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<String> {
 
     // hash last sub-block
     if total > 0 {
-        eprintln!("read <=32");
         let mut buf = [0u8; 32];
         let n = rdr.read(&mut buf)? as i32;
 

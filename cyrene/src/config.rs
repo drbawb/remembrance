@@ -33,10 +33,6 @@ pub struct DatasetConfig {
 }
 
 impl DaemonConfig {
-    pub fn uri_http(&self) -> String { // TODO: https
-        format!("http://{}/api", self.controller.urn)
-    }
-
     pub fn uri_ws(&self) -> String { // TODO: wss
         format!("ws://{}/api/websocket", self.controller.urn)
     }
