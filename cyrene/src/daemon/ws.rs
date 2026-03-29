@@ -17,7 +17,6 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[allow(dead_code)]
 pub struct WsInit {
     pub name: String,
     pub req_tx: SyncSender<Packet<EventReq>>,
@@ -28,6 +27,8 @@ pub struct WsInit {
 pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<Packet<EventRep>>> {
     println!("booting web socket ...");
     let cfg = config::read_cached_file()?;
+
+    drop(comms.rep_tx); // TODO: use of unused field
 
     let uri = cfg.uri_ws().parse::<Uri>()
        .map_err(|e| RunError::Misc(format!("invalid uri: {e:?}")))?;

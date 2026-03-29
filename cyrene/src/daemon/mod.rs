@@ -58,7 +58,6 @@ impl Ratchet {
     }
 }
 
-#[allow(unreachable_code)]
 pub fn run_command_queue() -> Result<String> {
     println!("booting daemon ...");
 
@@ -66,9 +65,10 @@ pub fn run_command_queue() -> Result<String> {
 
     let thread_evt = thread::spawn(move || {
         let mut kernel = dmn_init.kernel;
+
         match kernel.event_loop() {
             Err(err) => Err(RunError::Misc(format!("{err:?}"))),
-            Ok(_) => Ok(()),
+            Ok(_) => { drop(kernel.pending); Ok(()) }, // TODO: use pending
         }
     });
 
@@ -125,8 +125,6 @@ pub fn run_command_queue() -> Result<String> {
             todo!("ability to restart daemon?");
         }
     }
-
-    todo!("command queue supervisor exited unexpectedly");
 }
 
 pub struct DaemonKernel {
