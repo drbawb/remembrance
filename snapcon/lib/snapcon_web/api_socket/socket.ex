@@ -43,10 +43,44 @@ defmodule SnapconWeb.ApiServer do
     Logger.debug "packet #{debug_lens}: #{inspect(pl_sig)}"
 
     # output the packet
-    packet = <<header::binary-size(32)>>
-          <> <<pl_sig::binary-size(64), payload::binary-size(pl_length)>>
+    packet = <<header::binary-32>>
+          <> <<pl_sig::binary-64, payload::binary-size(pl_length)>>
 
     {:binary, packet}
+  end
+
+  defp verify_signed(msg) do
+    <<nonce::binary-16, msg::binary>> = msg
+    <<ttl::unsigned-64, msg::binary>> = msg
+    <<sig_len::unsigned-16, msg::binary>> = msg
+    <<pay_len::unsigned-16, msg::binary>> = msg
+    <<flags::unsigned-32, msg::binary>> = msg
+
+    # TODO: verify nonce
+    # TODO: verify expiry ttl
+
+    <<sig::binary-size(sig_len), msg::binary>> = msg
+
+    {payload, rest} = case msg do
+      <<pl::binary-size(pay_len)>> -> {pl, nil}
+      <<pl::binary-size(pay_len), rest::binary>> -> {pl, rest}
+    end
+
+    unless is_nil(rest) do
+      Logger.warning "#{byte_size(rest)} bytes after payload"
+    end
+
+    pl_digest = :crypto.hash_init(:sha256)
+      |> :crypto.hash_update(payload)
+      |> :crypto.hash_final()
+
+    pl_key = Base.decode64!(@pub)
+    pl_msg = <<nonce::binary-16, ttl::unsigned-64, pl_digest::binary-32>>
+
+    case :crypto.verify(:eddsa, :none, pl_msg, sig, [pl_key, :ed25519]) do
+      true -> {:ok, Jason.decode!(payload)}
+      false -> {:error, :signature_invalid}
+    end
   end
 
   defp msg_authenticate(), do: %{"Ident" => @version}
@@ -85,7 +119,10 @@ defmodule SnapconWeb.ApiServer do
 
   def handle_in({text, _opts}, state) do
     Logger.warning "incoming: #{inspect(text)}"
-    {:push, {:text, text <> " ... lmao"}, state}
+    {:ok, msg} = verify_signed(text)
+    Logger.info "decoded and verified: #{inspect(msg)}"
+
+    {:ok, state}
   end
 
   def handle_info(:keepalive, state) do

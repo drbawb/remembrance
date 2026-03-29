@@ -59,7 +59,7 @@ impl Ratchet {
 
 #[allow(unreachable_code)]
 pub fn run_command_queue() -> Result<String> {
-    println!("booting command queue");
+    println!("booting daemon ...");
 
     let dmn_init = DaemonInit::new();
 
@@ -167,6 +167,7 @@ impl DaemonInit {
 
 impl DaemonKernel {
     pub fn event_loop(&mut self) -> Result<()> {
+        println!("daemon event loop running ...");
 
         loop {
             let mut fr_start = Instant::now();

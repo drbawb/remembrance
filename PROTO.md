@@ -51,7 +51,7 @@ as untrusted until the procedure described below has been completed and is
 free from error.
 
 The `sig_len` field allows for a variable sized signature, a capability
-reserved for future expansion. `sig_len` is typically 64-bytes and `buf_sig` 
+reserved for future expansion. `sig_len` is typically 64-bytes and `buf_sig`
 should be interpreted as a signature produced with an `ed25519` signing key.
 (This field may be reinterpreted or ignored if any of the `reserved` words are
 set and the sender/receiver use them to negotiate selection of some other
@@ -65,7 +65,8 @@ Two 16-bit words are reserved for future expansion. A conforming parser must
 check these flags. All parsers must support this base format (0x0000; 0x0000).
 
 _A/N: TODO ;; error message format_
-Parsers should return a non-fatal error, `PLACEHOLDER: ERR_CMD_NOT_UNDERSTOOD` 
+
+Parsers should return a non-fatal error, `PLACEHOLDER: ERR_CMD_NOT_UNDERSTOOD`
 if they encounter a sequence of reserved words they are not equipped to decode.
 The reserved words are an opaque bitfield and must be interpreted according to
 the version specified in the `PLACEHOLDER: APP_NEGOTIATE_VER` message.
@@ -197,7 +198,7 @@ be used to refresh the cache's `ttl` value where applicable.
 
 ### The Command Buffer
 
-A transport should allocate a fixed-sized buffer for storing pending 
+A transport should allocate a fixed-sized buffer for storing pending
 correlation state. In the event this buffer is exhaused a transport
 will issue a `PLACEHOLDER: CMD_NOT_READY` response. The sender should
 buffer or perform neccessary accounting on its side to reschedule the

@@ -1,7 +1,6 @@
-// TODO: imports
 use data_encoding::BASE64;
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
-// use ed25519_dalek::{SigningKey, Signer};
+use ed25519_dalek::{SigningKey, Signer};
 use sha2::{Digest, Sha256};
 
 use tungstenite::{client, ClientRequestBuilder};
@@ -65,7 +64,10 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
         // drain outgoing submission queue
         if let Ok(event_rep) = comms.rep_rx.try_recv() {
             let json_str = serde_json::to_string(&event_rep)?;
-            println!("encoding & signing {json_str}");
+            println!("encoding & signing ({}) {json_str}", json_str.len());
+            let output = encode_packet(&cfg, &json_str)?;
+            socket.write(Message::binary(output))?;
+            socket.flush()?;
         }
 
         if !socket.can_read() { continue 'ws } // non-blocking
@@ -201,6 +203,85 @@ fn decode_packet(cfg: &DaemonConfig, buf: &[u8]) -> Result<String> {
     rdr.read_to_string(&mut output)?;
 
     Ok(output) // TODO: what do we return?
+}
+
+fn encode_packet(cfg: &DaemonConfig, msg: &str) -> Result<Vec<u8>> {
+    use byteorder::{NetworkEndian as NE, ReadBytesExt, WriteBytesExt};
+    
+    assert!(msg.len() <= u16::MAX as usize);
+
+    // TODO: cache base 64 decode result
+    let key_material = BASE64.decode(cfg.controller.privkey.as_bytes())
+        .expect("failed to decode ed25519 private key");
+
+    let sk_bytes: &[u8; 32] = key_material.as_slice().try_into()
+        .expect(&format!("invalid key length (have: {}, want: 32)", key_material.len()));
+
+    let sk = SigningKey::from_bytes(sk_bytes);
+
+    let mut rdr = Cursor::new(msg.as_bytes());
+    let mut total = msg.len() as i32;
+    let mut hasher = Sha256::new();
+
+    // hash fixed blocks of payload until we can't
+    while total > 32 {
+        let mut buf = [0u8; 32];
+        rdr.read_exact(&mut buf)?; total -= 32;
+        hasher.update(&buf[..]);
+    }
+
+    // hash last sub-block
+    if total > 0 {
+        let mut buf = [0u8; 32];
+        let n = rdr.read(&mut buf)? as i32;
+
+        if n < total { // short read; error
+            return Err(RunError::Misc(format!("short read (have: {n}, want: {total})")))
+        }
+
+        if n > total { // long read; warning
+            eprintln!("warning: unused bytes after payload?")
+        }
+
+        hasher.update(&buf[..total as usize]);
+    }
+
+    // update the payload digest & reset our reader
+    let pl_digest = hasher.finalize();
+    rdr.set_position(0);
+
+    // create signature
+    let mut sig_buf = Cursor::new(Vec::with_capacity(56));
+
+    let wall_t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time moving backwards? that's bad ...")
+        .as_secs();
+
+    let nonce = rand::random();
+    let ttl = wall_t + 30;
+    sig_buf.write_u128::<NE>(nonce)?;
+    sig_buf.write_u64::<NE>(ttl)?;
+    sig_buf.write(&pl_digest[..])?;
+
+    // sign with our private key
+    let sig_bytes = sig_buf.into_inner();
+    assert_eq!(sig_bytes.len(), 56);
+    let sig = sk.sign(&sig_bytes);
+
+    // assemble final packet
+    let mut packet = Cursor::new(vec![]);
+    packet.write_u128::<NE>(nonce)?;
+    packet.write_u64::<NE>(ttl)?;
+    packet.write_u16::<NE>(64)?;
+    packet.write_u16::<NE>(msg.len() as u16)?;
+    packet.write_u16::<NE>(0x0000)?; // rsvd 1
+    packet.write_u16::<NE>(0x0000)?; // rsvd 2
+    packet.write_all(sig.r_bytes())?;
+    packet.write_all(sig.s_bytes())?;
+    packet.write_all(msg.as_bytes())?;
+
+    Ok(packet.into_inner())
 }
 
 fn reason_for_close(reason: frame::CloseFrame) -> (bool, String) {
