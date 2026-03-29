@@ -20,8 +20,29 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct WsInit {
+    pub name: String,
     pub req_tx: SyncSender<EventReq>,
+    pub rep_tx: SyncSender<EventRep>,
     pub rep_rx: Receiver<EventRep>,
+}
+
+pub struct WsState {
+    is_init: bool,
+    rep_tx: SyncSender<EventRep>,
+}
+
+impl WsState {
+    pub fn new(rep_tx: SyncSender<EventRep>) -> Self {
+        Self { is_init: false, rep_tx }
+    }
+
+    pub fn submit_message(&self, cfg: &DaemonConfig, msg: EventRep) -> Result<()> {
+        if !self.is_init {
+
+        }
+
+        Ok(())
+    }
 }
 
 pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
@@ -46,7 +67,7 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
     let stream = TcpStream::connect(addr)?;
 
     let ws_config = ClientRequestBuilder::new(uri)
-        .with_header("x-cyrene-id", "hitomi") // TODO: hardcoded host ID
+        .with_header("x-cyrene-id", &comms.name) // TODO: hardcoded host ID
         .with_sub_protocol("x-cyrene-v1");
 
     let (mut socket, _resp) = client::client(ws_config, stream.try_clone()?)
@@ -56,8 +77,18 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
     stream.set_nonblocking(true)?;
     println!("connected ws client for: {}", cfg.uri_ws());
 
+    // set up websocket state
+    let mut state = WsState::new(comms.rep_tx.clone());
+
     'ws: loop {
         std::thread::sleep(Duration::from_millis(100));
+
+        // TODO: secondary drain loop
+        // drain outgoing submission queue
+        if let Ok(event_rep) = comms.rep_rx.try_recv() {
+            let json_str = serde_json::to_string(&event_rep)?;
+            println!("encoding & signing {json_str}");
+        }
 
         if !socket.can_read() { continue 'ws } // non-blocking
 
@@ -87,15 +118,17 @@ pub fn start_socket_thread(comms: WsInit) -> Result<Receiver<EventRep>> {
             Message::Binary(bytes) => {
                 println!("read {} byte packet", bytes.len());
 
-                let output = decode_packet(&cfg, &bytes)?;
-                println!("decoded & verified: {output}");
+                let json_str = decode_packet(&cfg, &bytes)?;
+                let app_msg = serde_json::from_str(&json_str)?;
+
+                comms.req_tx.send(app_msg)
+                    .inspect_err(|err| eprintln!("{err:?}"))
+                    .map_err(|_| { RunError::Misc("ws->daemon submission error".into()) })?;
 
                 continue 'ws;
             },
-            _ => {
-                println!("wtf");
-                continue 'ws;
-            },
+
+            _ => { eprintln!("unhandled ws frame"); continue 'ws; },
         };
 
         // eprintln!("ws debug: {message}");

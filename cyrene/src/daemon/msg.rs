@@ -9,7 +9,7 @@ pub enum EventReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventRep {
-    Ident { version: u8, name: String },
+    Ident { version: u16, name: String },
 }
 
 #[derive(Debug, Deserialize, Serialize)]

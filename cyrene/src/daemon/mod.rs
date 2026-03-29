@@ -72,7 +72,9 @@ pub fn run_command_queue() -> Result<String> {
     });
 
     let ws_init = ws::WsInit {
+        name: "hitomi".into(), // TODO: config
         req_tx: dmn_init.tx_req_q.clone(),
+        rep_tx: dmn_init.tx_rep_q.clone(),
         rep_rx: dmn_init.rx_sub_q,
     };
 
@@ -98,7 +100,9 @@ pub fn run_command_queue() -> Result<String> {
 
             // attempt to reboot w/ our reclaimed submission queue
             let ws_init = ws::WsInit {
+                name: "hitomi".into(), // TODO: config
                 req_tx: dmn_init.tx_req_q.clone(),
+                rep_tx: dmn_init.tx_rep_q.clone(),
                 rep_rx: rx_rep_q,
             };
 
@@ -135,6 +139,7 @@ pub struct DaemonInit {
     kernel: DaemonKernel,
 
     tx_req_q: SyncSender<EventReq>,
+    tx_rep_q: SyncSender<EventRep>,
     rx_sub_q: Receiver<EventRep>,
 }
 
@@ -145,7 +150,7 @@ impl DaemonInit {
 
         let fresh_instance = DaemonKernel {
             req_q: rx_req_q,
-            sub_q: tx_rep_q,
+            sub_q: tx_rep_q.clone(),
             pending: Blist::new(),
         };
 
@@ -153,6 +158,7 @@ impl DaemonInit {
         Self {
             kernel: fresh_instance,
             tx_req_q: tx_req_q,
+            tx_rep_q: tx_rep_q.clone(),
             rx_sub_q: rx_rep_q,
         }
     }
@@ -196,6 +202,19 @@ impl DaemonKernel {
 
             Ty::ZfsListDataset(args) => {
                 println!("zfs list :: {args:?}");
+            },
+
+            Ty::Ident { version } => {
+                if version != 0x1001 {
+                    eprintln!("ident request for unknown version {:04x}", version);
+                    return Err(RunError::Misc("ident version failure".into()));
+                }
+
+                println!("request to authenticate processed ;; starting v{version}");
+
+                self.sub_q.send(EventRep::Ident { version, name: "hitomi".into() })
+                    .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
+                    .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
             },
 
             msg => { eprintln!("unknown message {msg:?}") },

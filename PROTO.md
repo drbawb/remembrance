@@ -22,6 +22,12 @@ u64 : 64-bit be word
 
 ## WebSocket Transport
 
+The transport should be kept-alive by the `controller` periodically sending
+`ping` control frames, and the `daemon` responding automatically with a `pong`
+control frame. These control frames are unauthenticated and outside the scope
+of the packet encoding described below. (The following packet authentication
+scheme will only be applied to `binary` frames.)
+
 Each binary frame should contain a payload of the following opaque format:
 
 ```
@@ -39,12 +45,47 @@ payload:
 [u8; ...]     : any contents after `pay_len` is ignored and unauthenticated
 ```
 
-`sig_len` is typically 64-bytes and `buf_sig` is a signature produced with an
-ed25519 signing key. (This key is shared using some identity mechanism out of
-band. In the WebSocket transport this is done by setting the `x-cyrene-id`
-header on the initial HTTP request which will be upgraded by this transport.)
+The packet header totals `32 bytes` on the wire and it should be read in its
+entirety before processing the payload below. The payload should be considered
+as untrusted until the procedure described below has been completed and is
+free from error.
+
+The `sig_len` field allows for a variable sized signature, a capability
+reserved for future expansion. `sig_len` is typically 64-bytes and `buf_sig` 
+should be interpreted as a signature produced with an `ed25519` signing key.
+(This field may be reinterpreted or ignored if any of the `reserved` words are
+set and the sender/receiver use them to negotiate selection of some other
+signature.)
+
+This key is shared using some identity mechanism out-of-band. In the WebSocket
+transport this is accomplished by setting the `x-cyrene-id` header on the
+initial HTTP request which will be upgraded by this transport.
+
+Two 16-bit words are reserved for future expansion. A conforming parser must
+check these flags. All parsers must support this base format (0x0000; 0x0000).
+
+_A/N: TODO ;; error message format_
+Parsers should return a non-fatal error, `PLACEHOLDER: ERR_CMD_NOT_UNDERSTOOD` 
+if they encounter a sequence of reserved words they are not equipped to decode.
+The reserved words are an opaque bitfield and must be interpreted according to
+the version specified in the `PLACEHOLDER: APP_NEGOTIATE_VER` message.
+
+Messages during the initial handshake *MUST* be sent without reserved flags
+until a version negotiation packet (or packet sequence) passes authentication
+and deserialization.
 
 ### Early Verification
+
+_The first packet must be an ed25519-signed `Ident` message. The message will
+be sent from the controller to the daemon which is connecting. The daemon will
+send an identificaiton response including the configured hostname; if the
+identity matches what is configured for the key then both peers will transition
+to a fully authenticated state._
+
+_If the first packet is anything other than an `Ident` message the reserved
+flags must be set to signal negotiation, and the sender/receiver must negotiate
+some other authentication mechanism accordingly before sending the `Ident`
+message._
 
 A frame will undergo `validity` considerations as follows:
 
@@ -106,6 +147,85 @@ to be a UTF-8 encoded JSON string. (Future flags may alter the expectation of
 how a conforming parser should interpret the payload; as such the `buf_payload`
 field is considered to be an opaque byte-array from the perspective of the
 wire format decoder.)
+
+# Application Message Format
+
+The application message format is canonically owned by the Rust implementation
+of the `cyrene` daemon. This implementation expects messages to be exchanged
+via UTF-8 encoded JSON strings. (Limited portions of the protocol may be
+restricted to ASCII.)
+
+The canonical format is esentially "whatever `serde_json` does with the type."
+
+There are two broad categories of messages:
+
+- `EventReq`: the daemon's inbound event queue from the controller
+- `EventRep`: the daemon's outgoing submission queue
+
+## Task Lifecycle
+
+Events generally consist of a command, some arguments, and optionally a
+correlation ID.
+
+Tasks which can complete quickly (under several hundred milliseconds)
+often lack a correlation ID and block the event loop until they
+both complete *and* generate a reply to the controller.
+
+Other tasks, which are expected to take some time to complete, will instead
+generate and return a correlation ID to the peer. This ID will be tracked
+by the owner with some continuation-state. The continuation, either when it
+is fired or times out, will optionally send an asynchronous reply containing
+the correlation ID.
+
+### Long-running Tasks
+
+The peer upon receiving a message with a correlation ID will check a local
+cache of pending submissions it was waiting for, and use the correlation ID
+to update the appropriate application state.
+
+**Tasks which return a correlation ID are generally fallible**, meaning, such
+tasks may be dropped under heavy load, may fail non-fatally, or may not
+generate output for many minutes or hours. When possible the application should
+include an expected response time with its correlation ID; however the
+expiration of this timestamp does NOT strictly imply that the task failed.
+
+If a correlation entry is determined to be stale by its associated `ttl` the
+application should use an appropriate status API which takes the correlation
+ID as input and returns task information as its output. This status API may
+be used to refresh the cache's `ttl` value where applicable.
+
+
+### The Command Buffer
+
+A transport should allocate a fixed-sized buffer for storing pending 
+correlation state. In the event this buffer is exhaused a transport
+will issue a `PLACEHOLDER: CMD_NOT_READY` response. The sender should
+buffer or perform neccessary accounting on its side to reschedule the
+task, and retry the task at a later time.
+
+The receiving thread should generally not block when its buffer is exhausted.
+It is expected that it remain able to respond to commands which do not require
+asynchrony or other allocations of fixed resources.
+
+_A/N: TODO ;; properly specify what a "continuation" looks like_
+
+### Continuations
+
+When a command is scheduled to run in the background (or to be run after an
+interval elapses) that completion must be bound to an identity known as a
+"correlation ID." This mapping must ultimately be a function which:
+
+a. generates a response on a background thread, handling failure of the thread
+   as appropriate, and generally translating the result of that computation
+   into an application level message.
+
+b. submits the response to the transport for encoding & transmission via
+   a clone of the submission queue. used nonces must be added to the daemon's
+   packet authenticity cache.
+
+c. locks and updates the daemon's state such that the handled correlation ID
+   is removed from the list of pending submissions.
+
 
 [ws-rfc]: https://datatracker.ietf.org/doc/html/rfc6455
 

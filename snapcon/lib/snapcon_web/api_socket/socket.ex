@@ -59,8 +59,7 @@ defmodule SnapconWeb.ApiServer do
     {:binary, packet}
   end
 
-  defp msg_authenticate(), do:
-    Jason.encode!(%{"Ident" => @version})
+  defp msg_authenticate(), do: %{"Ident" => @version}
 
   def init(opts) do
     Logger.debug "init called :: #{inspect(opts)}"
@@ -105,7 +104,7 @@ defmodule SnapconWeb.ApiServer do
 
   def handle_info(%{"ping" => need_reply}, state) do
     Logger.debug "got daemon ping request :: #{need_reply}"
-    {:push, {:text, "you are being summoned do not resist"}, state}
+    {:push, push_signed(%{"Ping" => %{"msg" => "you are being summoned, do not resist ..."}}), state}
   end
 
   def handle_info(info, state) do
