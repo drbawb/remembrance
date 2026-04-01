@@ -6,14 +6,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::config::{self, DaemonConfig};
-use crate::daemon::ws::start_socket_thread;
 use err::*;
 use msg::*;
 
 pub mod err;
 pub mod msg;
 pub mod proto;
-mod ws;
+
+mod tcp;
 
 enum BusEvent {
     NewConfig { cfg: DaemonConfig },
@@ -78,16 +78,19 @@ pub fn run_command_queue() -> Result<String> {
         }
     });
 
-    let ws_init = ws::WsInit {
+    let tcp_init = tcp::ClientInit {
         name: "hitomi".into(), // TODO: config
         req_tx: dmn_init.tx_req_q.clone(),
         rep_tx: dmn_init.tx_rep_q.clone(),
         rep_rx: dmn_init.rx_sub_q,
     };
 
+    let client = tcp::Client::new(tcp_init)
+        .map_err(|e| RunError::Misc(format!("could not start tcp client: {e:?}")))?;
+
     let mut ratchet_ws = Ratchet::new();
     let mut thread_ws = thread::spawn(move || {
-        ws::start_socket_thread(ws_init)
+        tcp::client_event_loop(client)
     });
 
     loop { // TODO: remove websocket thread
@@ -98,23 +101,25 @@ pub fn run_command_queue() -> Result<String> {
                 .inspect_err(|err| { eprintln!("w/s thread panic: {err:?}") })
                 .ok().expect("ws panic exit"); // TODO: supervisor trap exit
 
-            let rx_rep_q = ws_result
-                .inspect_err(|err| { eprintln!("w/s fatal error: {err:?}") })
-                .ok().expect("ws fatal exit"); // TODO: supervisor trap exit
+            // let rx_rep_q = ws_result
+            //     .inspect_err(|err| { eprintln!("w/s fatal error: {err:?}") })
+            //     .ok().expect("ws fatal exit"); // TODO: supervisor trap exit
 
             // apply backoff
             thread::sleep(ratchet_ws.wait());
 
+            // TODO: tcp reinit
             // attempt to reboot w/ our reclaimed submission queue
-            let ws_init = ws::WsInit {
-                name: "hitomi".into(), // TODO: config
-                req_tx: dmn_init.tx_req_q.clone(),
-                rep_tx: dmn_init.tx_rep_q.clone(),
-                rep_rx: rx_rep_q,
-            };
+            // let ws_init = tcp::WsInit {
+            //     name: "hitomi".into(), // TODO: config
+            //     req_tx: dmn_init.tx_req_q.clone(),
+            //     rep_tx: dmn_init.tx_rep_q.clone(),
+            //     rep_rx: rx_rep_q,
+            // };
 
             thread_ws = thread::spawn(move || {
-                start_socket_thread(ws_init)
+                todo!("restart monitor")
+                // start_socket_thread(ws_init)
             });
 
             ratchet_ws.reset(Instant::now());

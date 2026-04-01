@@ -26,6 +26,7 @@ defmodule Snapcon.Application do
         work_path: "/work"},
 
       {Snapcon.DaemonServ, []},
+      daemon_tcp_spec(),
       # Start to serve requests, typically the last entry
       SnapconWeb.Endpoint
     ]
@@ -34,6 +35,16 @@ defmodule Snapcon.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Snapcon.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp daemon_tcp_spec() do
+    opts = %{
+      socket_opts: [port: 4001],
+      num_acceptors: 16,
+      max_connections: 1024
+    }
+
+    :ranch.child_spec(:cyrene_tcp, :ranch_tcp, opts, Snapcon.TcpServer, [])
   end
 
   # Tell Phoenix to update the endpoint configuration

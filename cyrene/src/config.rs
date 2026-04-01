@@ -32,12 +32,6 @@ pub struct DatasetConfig {
     pub matchspec: String,
 }
 
-impl DaemonConfig {
-    pub fn uri_ws(&self) -> String { // TODO: wss
-        format!("ws://{}/api/websocket", self.controller.urn)
-    }
-}
-
 pub fn read_cached_file() -> Result<DaemonConfig, RunError> {
     // TODO: take non-default path?
     

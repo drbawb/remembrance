@@ -14,9 +14,6 @@ pub enum RunError {
     #[error("json parse error: {0}")]
     JsonEncoding(#[from] serde_json::Error),
 
-    #[error("ws api error: {0}")]
-    WebSocket(#[from] tungstenite::Error),
-
     #[error("[chan] senders gone? {0}")]
     RxDisconnected(String),
 

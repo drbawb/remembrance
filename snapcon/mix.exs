@@ -35,6 +35,7 @@ defmodule Snapcon.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      # phoenix deps
       {:phoenix, "~> 1.8"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.10"},
@@ -52,9 +53,16 @@ defmodule Snapcon.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:bandit, "~> 1.5"},
+
+      # application deps
       {:ex2ms, "~> 1.0"},
+
+      # used for daemon-controller communication
+      {:decibel, "~> 0.2"},
+      {:ranch, "~> 2.2"},
       {:websock_adapter, "~> 0.5"},
 
+      # used for test/dev/releng
       {:depscheck, "~> 1.0", only: :dev, runtime: false},
       {:ex_doc, "~> 0.4", only: :dev, runtime: false},
     ]
