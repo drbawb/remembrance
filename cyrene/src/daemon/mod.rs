@@ -5,13 +5,19 @@ use std::io::{Read};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::config::{self, DaemonConfig};
 use crate::daemon::ws::start_socket_thread;
 use err::*;
 use msg::*;
 
 pub mod err;
 pub mod msg;
+pub mod proto;
 mod ws;
+
+enum BusEvent {
+    NewConfig { cfg: DaemonConfig },
+}
 
 #[derive(Debug)]
 struct Ratchet {
@@ -84,7 +90,7 @@ pub fn run_command_queue() -> Result<String> {
         ws::start_socket_thread(ws_init)
     });
 
-    loop {
+    loop { // TODO: remove websocket thread
         thread::sleep(Duration::from_millis(1000));
 
         if thread_ws.is_finished() {
@@ -135,6 +141,7 @@ pub struct DaemonKernel {
 
     tx_wkr_q: Sender<Packet<EventReq>>,
     rx_wkr_q: Receiver<Packet<EventReq>>,
+    tx_cfg_q: Sender<DaemonConfig>,
 }
 
 pub struct DaemonInit {
@@ -142,6 +149,7 @@ pub struct DaemonInit {
 
     tx_req_q: Sender<Packet<EventReq>>,
     tx_rep_q: Sender<Packet<EventRep>>,
+    rx_cfg_q: Receiver<DaemonConfig>,
     rx_sub_q: Receiver<Packet<EventRep>>,
 }
 
@@ -150,13 +158,14 @@ impl DaemonInit {
         let (tx_req_q, rx_req_q) = bounded(8);
         let (tx_rep_q, rx_rep_q) = bounded(1024);
         let (tx_wkr_q, rx_wkr_q) = bounded(32);
+        let (tx_cfg_q, rx_cfg_q) = bounded(8);
 
         let fresh_instance = DaemonKernel {
             req_q: rx_req_q,
             sub_q: tx_rep_q.clone(),
             pending: Blist::new(),
 
-            tx_wkr_q, rx_wkr_q,
+            tx_wkr_q, rx_wkr_q, tx_cfg_q,
         };
 
 
@@ -164,6 +173,7 @@ impl DaemonInit {
             kernel: fresh_instance,
             tx_req_q: tx_req_q,
             tx_rep_q: tx_rep_q.clone(),
+            rx_cfg_q: rx_cfg_q,
             rx_sub_q: rx_rep_q,
         }
     }
@@ -199,7 +209,8 @@ impl DaemonKernel {
 
             if next_monitor_t > fr_beg {
                 next_monitor_t = Instant::now() + Duration::from_secs(10);
-                self.sub_task_monitor(&mut workers)?
+                self.sub_task_monitor(&mut workers)?;
+                self.sub_spin_config()?;
             }
 
             let fr_end_t = fr_beg.elapsed();
@@ -210,6 +221,16 @@ impl DaemonKernel {
 
             thread::sleep(fr_budget_ms.saturating_sub(fr_end_t));
         }
+    }
+
+    fn sub_spin_config(&self) -> Result<()> {
+        if false {
+            let cfg = config::read_cached_file()?;
+            self.tx_cfg_q.send(cfg)
+                .map_err(|err| { RunError::TxDisconnected(format!("[chan] receivers gone? {err:?}")) })?;
+        }
+
+        Ok(()) // TODO: fs notify on config change?
     }
 
     fn sub_task_monitor(&self, threads: &mut [JoinHandle<()>]) -> Result<()> {

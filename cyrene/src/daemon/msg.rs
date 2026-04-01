@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Packet<T> {
     pub nonce: CorrelationId,
     pub ttl: u64,
@@ -12,21 +12,21 @@ pub struct Packet<T> {
 }
 
 
-impl<T: fmt::Debug> fmt::Debug for Packet<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ttl {}", self.ttl)?;
-
-        match self.len {
-            Some(len) => write!(f, " len {len}")?,
-            None => write!(f, " len ?")?,
-        };
-
-        write!(f, " nonce {:16x}\n", self.nonce.0)?;
-        write!(f, "{:?}", self.msg)?;
-
-        Ok(())
-    }
-}
+// impl<T: fmt::Debug> fmt::Debug for Packet<T> {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         write!(f, "ttl {}", self.ttl)?;
+// 
+//         match self.len {
+//             Some(len) => write!(f, " len {len}")?,
+//             None => write!(f, " len ?")?,
+//         };
+// 
+//         write!(f, " nonce {:16x}\n", self.nonce.0)?;
+//         write!(f, "{:?}", self.msg)?;
+// 
+//         Ok(())
+//     }
+// }
 
 impl Packet<()> {
     // TODO: wow I hate this, T=() lmao ...

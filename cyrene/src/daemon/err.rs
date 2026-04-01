@@ -1,3 +1,4 @@
+use crossbeam_channel as cc;
 use thiserror::Error;
 
 use std::io;
@@ -16,8 +17,11 @@ pub enum RunError {
     #[error("ws api error: {0}")]
     WebSocket(#[from] tungstenite::Error),
 
-    #[error("channel hungup unexpectedly: {0}")]
+    #[error("[chan] senders gone? {0}")]
     RxDisconnected(String),
+
+    #[error("[chan] receiver hungup: {0}")]
+    TxDisconnected(String),
 
     #[error("{0}")]
     Misc(String),

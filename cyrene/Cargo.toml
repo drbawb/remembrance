@@ -6,6 +6,7 @@ license = "BSD-3-Clause"
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["backtrace"] }
+bitflags = "2.11.0"
 blinkedblist = { git = "https://git.sr.ht/~hime/blinkedblist" }
 byteorder = { version = "1.5.0", features = ["i128"] }
 clap = { version = "4.6.0", features = ["derive"] }
@@ -16,6 +17,7 @@ rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
+snow = "0.10.0"
 thiserror = "2.0.18"
 toml = "1.0.6"
 tracing = "0.1.44"
