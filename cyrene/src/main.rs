@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use data_encoding::BASE64;
-use ed25519_dalek::SigningKey;
 use rand::rngs::StdRng;
 
 use daemon::msg::*;
@@ -78,10 +77,7 @@ fn entry_run(args: RunArgs) -> Result<ExitCode> {
 }
 
 fn entry_genkey() -> Result<ExitCode> {
-    let mut rng: StdRng = rand::make_rng();
-    let sk = SigningKey::generate(&mut rng);
-    println!("{}", BASE64.encode(sk.as_bytes()));
-
+    // TODO: privkey for noise
     Ok(ExitCode::from(0))
 }
 
@@ -98,10 +94,6 @@ fn entry_pubkey() -> Result<ExitCode> {
     let sk_bytes: &[u8; 32] = stdin_bytes.as_slice().try_into()
         .expect(&format!("expected [32] bytes, got [{}]", stdin_bytes.len()));
 
-    let sk = SigningKey::from_bytes(sk_bytes);
-    let vk = sk.verifying_key();
-
-    println!("{}", BASE64.encode(vk.as_bytes()));
-
+    // TODO: pubkey for noise
     Ok(ExitCode::from(0))
 }

@@ -11,7 +11,6 @@ use msg::*;
 
 pub mod err;
 pub mod msg;
-pub mod proto;
 
 mod tcp;
 
