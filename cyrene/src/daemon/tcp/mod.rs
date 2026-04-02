@@ -299,11 +299,13 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
     assert_eq!(true, client.tx_buf.is_empty());
     assert_eq!(true, client.rx_buf.is_empty());
 
+    client.conn_s.set_nodelay(true).map_err(|e| ClientError::NetIo(e))?;
+
     client.conn_p.registry()
         .reregister(&mut client.conn_s, client_t, Interest::READABLE)
         .map_err(|e| ClientError::NetIo(e))?;
 
-    let timeout = Duration::from_millis(100);
+    let timeout = Duration::from_millis(10);
 
     'main: loop {
         if client.tx_buf.is_empty() {

@@ -25,7 +25,9 @@ defmodule Snapcon.Application do
         out_path: "/output",
         work_path: "/work"},
 
-      {ThousandIsland, port: 4001, handler_module: Snapcon.TcpServer},
+      {ThousandIsland, port: 4001, 
+        handler_module: Snapcon.TcpServer,
+        transport_options: [nodelay: true]},
 
       {Snapcon.DaemonServ, []},
       # Start to serve requests, typically the last entry
