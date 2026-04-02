@@ -48,6 +48,15 @@ defmodule Snapcon.TcpServer do
   end
 
   @impl ThousandIsland.Handler
+  def handle_close(socket, state) do
+    Logger.info "got close :: #{inspect(state)}"
+
+    if Map.has_key?(state.assigns, :name) do
+      :ok = DaemonServ.remove_host(state.assigns[:name])
+    end
+  end
+
+  @impl ThousandIsland.Handler
   def handle_data(data, _socket, state) do
     Logger.info "got data :: #{inspect(data)}"
     Logger.info "state :: #{inspect(state)}"
@@ -113,10 +122,10 @@ defmodule Snapcon.TcpServer do
     Logger.debug "ident header (n=#{msg_l}): #{inspect(header)}"
     TCP.send(state.socket, header)
     TCP.send(state.socket, msg_e)
-  
+
     state
   end
-  
+
   defp send_any_packet(state, message) do
     msg_p = Jason.encode!(message)
     Logger.debug "noise :: #{inspect(state.noise)}, msg_p :: #{inspect(msg_p)}"
@@ -136,7 +145,7 @@ defmodule Snapcon.TcpServer do
     Logger.debug "message header (n=#{msg_l}): #{inspect(header)}"
     TCP.send(state.socket, header)
     TCP.send(state.socket, msg_e)
-  
+
     {state, nonce} # TODO: better nonce return
   end
 
@@ -189,7 +198,7 @@ defmodule Snapcon.TcpServer do
 
   defp read_message(state, header, message) do
     {ciphertext, rest} = cond do
-      byte_size(message) < header.len -> 
+      byte_size(message) < header.len ->
         read_message_more(state, header, message)
 
       byte_size(message) >= header.len ->
@@ -198,7 +207,7 @@ defmodule Snapcon.TcpServer do
     end
 
     Logger.debug "(pl: #{byte_size(ciphertext)}, tail: #{byte_size(rest)})"
-    if byte_size(rest) > 0, do: 
+    if byte_size(rest) > 0, do:
       raise "todo: unexpected tail; need continuations ..."
 
     msg = Decibel.decrypt(state.noise, ciphertext)
@@ -233,7 +242,7 @@ defmodule Snapcon.TcpServer do
     {state, %{
       nonce: nonce, ttl: ttl,
       flags: flags, reserved: r,
-      len: len 
+      len: len
     }, tail}
   end
 
@@ -261,7 +270,7 @@ defmodule Snapcon.TcpServer do
         <<hs_msg::binary-size(msg2_len), tail::binary>> = rest
         {hs_msg, tail}
 
-      true -> 
+      true ->
         rem = msg2_len - byte_size(rest)
         Logger.info "going to read handshake (n=#{msg2_len}, rem=#{rem})}"
         {:ok, <<hs_msg::binary-size(rem), tail::binary>>} = TCP.recv(socket, msg2_len, 30_000)
