@@ -38,8 +38,6 @@ defmodule Snapcon.MixProject do
       # phoenix deps
       {:phoenix, "~> 1.8"},
       {:phoenix_ecto, "~> 4.5"},
-      {:ecto_sql, "~> 3.10"},
-      {:ecto_sqlite3, ">= 0.0.0"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.0"},
@@ -51,16 +49,14 @@ defmodule Snapcon.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
-      {:jason, "~> 1.2"},
       {:bandit, "~> 1.5"},
 
       # application deps
-      {:ex2ms, "~> 1.0"},
-
-      # used for daemon-controller communication
       {:decibel, "~> 0.2"},
-      {:ranch, "~> 2.2"},
-      {:websock_adapter, "~> 0.5"},
+      {:ecto_sql, "~> 3.10"},
+      {:ecto_sqlite3, ">= 0.0.0"},
+      {:ex2ms, "~> 1.0"},
+      {:jason, "~> 1.2"},
 
       # used for test/dev/releng
       {:depscheck, "~> 1.0", only: :dev, runtime: false},
