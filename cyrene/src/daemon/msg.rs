@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -10,22 +9,6 @@ pub struct Packet<T> {
     pub len: Option<usize>,
     pub msg: T,
 }
-
-// impl<T: fmt::Debug> fmt::Debug for Packet<T> {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         write!(f, "ttl {}", self.ttl)?;
-// 
-//         match self.len {
-//             Some(len) => write!(f, " len {len}")?,
-//             None => write!(f, " len ?")?,
-//         };
-// 
-//         write!(f, " nonce {:16x}\n", self.nonce.0)?;
-//         write!(f, "{:?}", self.msg)?;
-// 
-//         Ok(())
-//     }
-// }
 
 impl Packet<()> {
     // TODO: wow I hate this, T=() lmao ...
@@ -51,7 +34,7 @@ impl<T> Packet<T> {
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventReq {
     Ident { version: u16 },
-    Ping { msg: String }, 
+    Ping { msg: String },
     ZfsListDataset(ZfsListArgs),
 }
 

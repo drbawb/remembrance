@@ -24,6 +24,52 @@ defmodule Snapcon.TcpServer do
     defstruct socket: nil, noise: nil, assigns: %{}
   end
 
+  defmodule Header do
+    @moduledoc """
+    After early initialization each packet binary starts with the following header:
+
+    ```
+    header:
+    nonce    : [u8; 16] ;; 128-bit unsigned integer
+    expiry   : u64      ;; 64-bit unix timestamp (seconds from epoch)
+    flags    : u32      ;; flag word used for multi-part messages etc.
+    pay_len  : u16      ;; payload length, should be <= (64 * 1024)
+    reserved : u16      ;; reserved word for future flags
+
+    payload:
+    [u8; pay_len] : buf_payload
+
+    add'l payload:
+    [u8; ...]     : any contents after `pay_len` is invalid unless the `flags` or
+                    `reserved` registers reference data in this region.
+    ```
+
+    This module stores this structure as an Erlang-term. The total packet size
+    must not exceed 64KiB, the payload length *DOES NOT* include the size of
+    the header, as such a payload must never be more than `2^16 - 32 bytes`.
+    """
+
+    @typedoc """
+    - `nonce`: if not provided it is 16 random bytes from the system CSPRNG
+    - `ttl`: 64-bit unix timestamp, defaults to +30s in the future
+    - `flags`: protocol bitfield, defaults to 0
+    - `reserved`: protocol bitfield, defaults to 0
+    - `len`: the length of the payload contents NOT INCLUDING this header
+    """
+    @type t :: %__MODULE__ {
+      nonce: <<_::16>>,
+      ttl: <<_::8>>,
+      flags: <<_::4>>,
+      reserved: <<_::2>>,
+      len: <<_::2>>}
+
+    defstruct [
+      nonce: :crypto.strong_rand_bytes(16),
+      ttl: System.os_time() + 30,
+      flags: 0, reserved: 0, len: 0]
+
+  end
+
   @noise_protocol "Noise_KK_25519_ChaChaPoly_BLAKE2s"
   @version %{"version" => 0x1001}
 
@@ -32,7 +78,7 @@ defmodule Snapcon.TcpServer do
 
   @impl ThousandIsland.Handler
   def handle_connection(socket, state) do
-    Logger.info "got connection :: #{inspect(state)}"
+    Logger.info "new TCP connection :: #{inspect(state)}"
 
     init = %HandlerState{socket: socket}
 
@@ -48,8 +94,8 @@ defmodule Snapcon.TcpServer do
   end
 
   @impl ThousandIsland.Handler
-  def handle_close(socket, state) do
-    Logger.info "got close :: #{inspect(state)}"
+  def handle_close(_socket, state) do
+    Logger.info "closing TCP connection :: #{inspect(state)}"
 
     if Map.has_key?(state.assigns, :name) do
       :ok = DaemonServ.remove_host(state.assigns[:name])
@@ -58,9 +104,6 @@ defmodule Snapcon.TcpServer do
 
   @impl ThousandIsland.Handler
   def handle_data(data, _socket, state) do
-    Logger.info "got data :: #{inspect(data)}"
-    Logger.info "state :: #{inspect(state)}"
-
     state = read_packet(state, data)
     {:continue, state}
   end
@@ -82,9 +125,8 @@ defmodule Snapcon.TcpServer do
     pending = state.assigns[:pending]
     message = %{"ZfsListDataset" => %{"ent_ty" => "All", "recursive" => true}}
 
-    {state, nonce} = send_any_packet(state, message)
-    Logger.info "#{inspect(pending)}/#{inspect(nonce)}"
-    state = assign(state, :pending, Map.put(pending, nonce, ref))
+    {state, header} = send_any_packet(state, message)
+    state = assign(state, :pending, Map.put(pending, header.nonce, ref))
 
     {:noreply, {socket, state}, socket.read_timeout}
   end
@@ -119,7 +161,6 @@ defmodule Snapcon.TcpServer do
           <> <<flags::unsigned-32>> <> <<reserved::unsigned-16>>
           <> <<msg_l::unsigned-16>>
 
-    Logger.debug "ident header (n=#{msg_l}): #{inspect(header)}"
     TCP.send(state.socket, header)
     TCP.send(state.socket, msg_e)
 
@@ -128,31 +169,24 @@ defmodule Snapcon.TcpServer do
 
   defp send_any_packet(state, message) do
     msg_p = Jason.encode!(message)
-    Logger.debug "noise :: #{inspect(state.noise)}, msg_p :: #{inspect(msg_p)}"
     msg_e = Decibel.encrypt(state.noise, msg_p)
     msg_l = byte_size(:erlang.iolist_to_binary(msg_e))
 
-    nonce = :crypto.strong_rand_bytes(16)
-    ttl = System.os_time(:second) + 30
-    flags = 0
-    reserved = 0
+    hp = %Header{len: msg_l}
 
     # prepare the message header
-    header = <<nonce::binary-16, ttl::unsigned-64>>
-          <> <<flags::unsigned-32>> <> <<reserved::unsigned-16>>
-          <> <<msg_l::unsigned-16>>
+    header = <<hp.nonce::binary-16, hp.ttl::unsigned-64>>
+          <> <<hp.flags::unsigned-32, hp.reserved::unsigned-16>>
+          <> <<hp.len::unsigned-16>>
 
-    Logger.debug "message header (n=#{msg_l}): #{inspect(header)}"
     TCP.send(state.socket, header)
     TCP.send(state.socket, msg_e)
 
-    {state, nonce} # TODO: better nonce return
+    {state, hp}
   end
 
-  # TODO: this probably needs to move to its own genserver
   defp handle_packet(state, {header, packet}) do
     status = state.assigns[:status]
-    Logger.debug("got packet [#{status}] :: #{inspect(Map.keys(packet))}")
 
     state = case status do
       :pending ->
@@ -167,7 +201,7 @@ defmodule Snapcon.TcpServer do
 
       :ready ->
         case packet do
-          %{"ZfsList" => %{"list" => listing}} ->
+          %{"ZfsList" => %{"list" => _dsets}} ->
             pending = state.assigns[:pending]
             {reply_ref, pending} = Map.pop!(pending, header.nonce)
             GenServer.reply(reply_ref, {:ok, packet})
@@ -185,14 +219,8 @@ defmodule Snapcon.TcpServer do
   end
 
   defp read_packet(state, buf) do
-    buf_n = byte_size(buf)
-    Logger.debug "started read w/ #{buf_n} bytes"
-
     {state, header, tail} = read_header(state, buf)
-    Logger.debug "header: #{inspect(header)}"
-
     {state, msg} = read_message(state, header, tail)
-
     handle_packet(state, {header, Jason.decode!(msg)})
   end
 
@@ -206,7 +234,6 @@ defmodule Snapcon.TcpServer do
         {pl, tail}
     end
 
-    Logger.debug "(pl: #{byte_size(ciphertext)}, tail: #{byte_size(rest)})"
     if byte_size(rest) > 0, do:
       raise "todo: unexpected tail; need continuations ..."
 
@@ -257,7 +284,6 @@ defmodule Snapcon.TcpServer do
     ini = Decibel.new(@noise_protocol, :ini, %{s: kp, rs: kc})
     msg1 = Decibel.handshake_encrypt(ini)
     msg1_len = byte_size(:erlang.iolist_to_binary(msg1))
-    Logger.info "msg1 :: #{inspect(msg1)}"
 
     :ok = TCP.send(socket, <<msg1_len::unsigned-16>>)
     :ok = TCP.send(socket, msg1)
@@ -272,7 +298,6 @@ defmodule Snapcon.TcpServer do
 
       true ->
         rem = msg2_len - byte_size(rest)
-        Logger.info "going to read handshake (n=#{msg2_len}, rem=#{rem})}"
         {:ok, <<hs_msg::binary-size(rem), tail::binary>>} = TCP.recv(socket, msg2_len, 30_000)
         {rest <> hs_msg, tail}
     end
@@ -281,7 +306,6 @@ defmodule Snapcon.TcpServer do
       Logger.warning "unexpected trailing data during handshake :: #{inspect(rest)}"
     end
 
-    Logger.info "msg2 :: #{inspect(msg2)}"
     Decibel.handshake_decrypt(ini, msg2)
 
     %{state | noise: ini}

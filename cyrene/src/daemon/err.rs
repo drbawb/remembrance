@@ -1,8 +1,8 @@
-use crossbeam_channel as cc;
 use thiserror::Error;
 
 use std::io;
 
+#[allow(dead_code)]
 #[derive(Error, Debug)]
 pub enum RunError {
     #[error("config error: {0}")]

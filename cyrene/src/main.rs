@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use data_encoding::BASE64;
-use rand::rngs::StdRng;
 
 use daemon::msg::*;
 
@@ -77,11 +76,24 @@ fn entry_run(args: RunArgs) -> Result<ExitCode> {
 }
 
 fn entry_genkey() -> Result<ExitCode> {
-    // TODO: privkey for noise
+    use snow::params::DHChoice;
+    use snow::resolvers::{self, CryptoResolver};
+
+    let resolver = resolvers::DefaultResolver::default();
+    let mut rng = resolver.resolve_rng().expect("crypto RNG unavailable");
+    let mut dh = resolver.resolve_dh(&DHChoice::Curve25519).expect("crytpo curve unavailable");
+    dh.generate(&mut *rng).expect("failed to generate key");
+
+    let output = BASE64.encode(dh.privkey());
+    println!("{output}");
+
     Ok(ExitCode::from(0))
 }
 
 fn entry_pubkey() -> Result<ExitCode> {
+    use snow::params::DHChoice;
+    use snow::resolvers::{self, CryptoResolver};
+
     let mut buf = String::new();
 
     io::stdin()
@@ -93,6 +105,13 @@ fn entry_pubkey() -> Result<ExitCode> {
 
     let sk_bytes: &[u8; 32] = stdin_bytes.as_slice().try_into()
         .expect(&format!("expected [32] bytes, got [{}]", stdin_bytes.len()));
+
+    let resolver = resolvers::DefaultResolver::default();
+    let mut dh = resolver.resolve_dh(&DHChoice::Curve25519).expect("crytpo curve unavailable");
+    dh.set(sk_bytes);
+
+    let output = BASE64.encode(dh.pubkey());
+    println!("{output}");
 
     // TODO: pubkey for noise
     Ok(ExitCode::from(0))

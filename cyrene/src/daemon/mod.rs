@@ -5,7 +5,7 @@ use std::io::{Read};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::config::{self, DaemonConfig};
+
 use err::*;
 use msg::*;
 
@@ -77,14 +77,14 @@ pub fn run_command_queue() -> Result<String> {
         name: "hitomi".into(), // TODO: config
         req_tx: dmn_init.tx_req_q.clone(),
         rep_tx: dmn_init.tx_rep_q.clone(),
-        rep_rx: dmn_init.rx_sub_q,
+        rep_rx: dmn_init.rx_sub_q.clone(),
     };
-
-    let client = tcp::Client::new(tcp_init)
-        .map_err(|e| RunError::Misc(format!("could not start tcp client: {e:?}")))?;
 
     let mut ratchet_ws = Ratchet::new();
     let mut thread_ws = thread::spawn(move || {
+        let client = tcp::Client::new(tcp_init)
+            .map_err(|e| RunError::Misc(format!("could not start tcp client: {e:?}")))?;
+
         tcp::client_event_loop(client)
     });
 
@@ -96,27 +96,26 @@ pub fn run_command_queue() -> Result<String> {
                 .inspect_err(|err| { eprintln!("w/s thread panic: {err:?}") })
                 .ok().expect("ws panic exit"); // TODO: supervisor trap exit
 
-            println!("ws exit: {ws_result:?}");
-            // let rx_rep_q = ws_result
-            //     .inspect_err(|err| { eprintln!("w/s fatal error: {err:?}") })
-            //     .ok().expect("ws fatal exit"); // TODO: supervisor trap exit
+            ws_result.inspect_err(|err| { eprintln!("w/s thread error: {err:?}") })
+                .ok().expect("ws fatal exit"); // TODO: supervisor trap exit
 
             // apply backoff
             thread::sleep(ratchet_ws.wait());
 
-            // TODO: tcp reinit
             // attempt to reboot w/ our reclaimed submission queue
-            // let ws_init = tcp::WsInit {
-            //     name: "hitomi".into(), // TODO: config
-            //     req_tx: dmn_init.tx_req_q.clone(),
-            //     rep_tx: dmn_init.tx_rep_q.clone(),
-            //     rep_rx: rx_rep_q,
-            // };
+            let tcp_init = tcp::ClientInit {
+                name: "hitomi".into(), // TODO: config
+                req_tx: dmn_init.tx_req_q.clone(),
+                rep_tx: dmn_init.tx_rep_q.clone(),
+                rep_rx: dmn_init.rx_sub_q.clone(),
+            };
+
 
             thread_ws = thread::spawn(move || {
-                thread::sleep(Duration::from_secs(30));
-                todo!("restart monitor")
-                // start_socket_thread(ws_init)
+                let client = tcp::Client::new(tcp_init)
+                    .map_err(|e| RunError::Misc(format!("could not start tcp client: {e:?}")))?;
+
+                tcp::client_event_loop(client)
             });
 
             ratchet_ws.reset(Instant::now());
@@ -143,7 +142,6 @@ pub struct DaemonKernel {
 
     tx_wkr_q: Sender<Packet<EventReq>>,
     rx_wkr_q: Receiver<Packet<EventReq>>,
-    tx_cfg_q: Sender<DaemonConfig>,
 }
 
 pub struct DaemonInit {
@@ -151,7 +149,6 @@ pub struct DaemonInit {
 
     tx_req_q: Sender<Packet<EventReq>>,
     tx_rep_q: Sender<Packet<EventRep>>,
-    rx_cfg_q: Receiver<DaemonConfig>,
     rx_sub_q: Receiver<Packet<EventRep>>,
 }
 
@@ -160,14 +157,13 @@ impl DaemonInit {
         let (tx_req_q, rx_req_q) = bounded(8);
         let (tx_rep_q, rx_rep_q) = bounded(1024);
         let (tx_wkr_q, rx_wkr_q) = bounded(32);
-        let (tx_cfg_q, rx_cfg_q) = bounded(8);
 
         let fresh_instance = DaemonKernel {
             req_q: rx_req_q,
             sub_q: tx_rep_q.clone(),
             pending: Blist::new(),
 
-            tx_wkr_q, rx_wkr_q, tx_cfg_q,
+            tx_wkr_q, rx_wkr_q,
         };
 
 
@@ -175,7 +171,6 @@ impl DaemonInit {
             kernel: fresh_instance,
             tx_req_q: tx_req_q,
             tx_rep_q: tx_rep_q.clone(),
-            rx_cfg_q: rx_cfg_q,
             rx_sub_q: rx_rep_q,
         }
     }
@@ -212,7 +207,6 @@ impl DaemonKernel {
             if next_monitor_t > fr_beg {
                 next_monitor_t = Instant::now() + Duration::from_secs(10);
                 self.sub_task_monitor(&mut workers)?;
-                self.sub_spin_config()?;
             }
 
             let fr_end_t = fr_beg.elapsed();
@@ -223,16 +217,6 @@ impl DaemonKernel {
 
             thread::sleep(fr_budget_ms.saturating_sub(fr_end_t));
         }
-    }
-
-    fn sub_spin_config(&self) -> Result<()> {
-        if false {
-            let cfg = config::read_cached_file()?;
-            self.tx_cfg_q.send(cfg)
-                .map_err(|err| { RunError::TxDisconnected(format!("[chan] receivers gone? {err:?}")) })?;
-        }
-
-        Ok(()) // TODO: fs notify on config change?
     }
 
     fn sub_task_monitor(&self, threads: &mut [JoinHandle<()>]) -> Result<()> {

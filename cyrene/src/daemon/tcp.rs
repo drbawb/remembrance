@@ -15,7 +15,7 @@ use std::io::{self,Read, Write};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-static NOISE_INIT: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
+const NOISE_INIT: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 
 ///
 /// The parameter-set needed to setup a new TCP client for a daemon.
@@ -28,6 +28,7 @@ static NOISE_INIT: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 /// the `rep_tx` sender so it can be cloned (again) in case the daemon
 /// needs to hot reload, etc.
 ///
+#[allow(dead_code)] // TODO: name & rep_tx
 #[derive(Debug)]
 pub struct ClientInit {
     pub name: String,
@@ -259,7 +260,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
     // event loop configuration
     let mut events = Events::with_capacity(128);
     let client_t = client.token; // NOTE: you may be tempted, but you need this ...
-    
+
     // run the event loop to settle the initial Noise handshake ...
     let mut crypto = perform_handshake(&mut client, client_t)?;
 
