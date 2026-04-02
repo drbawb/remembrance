@@ -193,11 +193,13 @@ impl Client {
         self.tx_buf.put_u64(packet.ttl);
         self.tx_buf.put_u32(0 /* flags */); // TODO: packet continuation
         self.tx_buf.put_u16(0 /* rsvd */);
-        self.tx_buf.put_u16(json_buf.len() as u16);
 
         // write encrypted message
         let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
         let sz = crypto.write_message(json_buf.as_bytes(), &mut packet_buf)?;
+
+        assert!(sz < (u16::MAX - 32) as usize);
+        self.tx_buf.put_u16(sz as u16);
         self.tx_buf.put(&packet_buf[..sz]);
 
         Ok(sz + 32)

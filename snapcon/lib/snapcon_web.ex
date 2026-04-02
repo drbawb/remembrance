@@ -97,6 +97,7 @@ defmodule SnapconWeb do
       # Core UI components
       import SnapconWeb.LayoutHelpers
       import SnapconWeb.PageFragments
+      alias Snapcon.Units
 
       # Shortcut for generating JS commands
       alias Phoenix.LiveView.JS

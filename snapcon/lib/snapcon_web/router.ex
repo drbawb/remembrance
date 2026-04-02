@@ -15,12 +15,6 @@ defmodule SnapconWeb.Router do
     plug :accepts, ["json"]
   end
 
-  scope "/api", SnapconWeb do
-    pipe_through :api
-
-    get "/websocket", ApiServerPlug, [wat: "the"] # TODO: wish this wasn't `get`
-  end
-
   scope "/", SnapconWeb do
     pipe_through :browser
 
