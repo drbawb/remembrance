@@ -98,8 +98,6 @@ a.button { text-decoration: none; }
 }
 
 /* flex and table */
-
-
 .fl-col    { flex-direction: column; }
 .fl-col-rv { flex-direction: column-reverse; }
 .fl-row    { flex-direction: row; }
@@ -121,6 +119,11 @@ a.button { text-decoration: none; }
 .fl-8 { flex-grow: 8 }
 .fl-9 { flex-grow: 9 }
 
+.ta-start  { text-align: start; }
+.ta-left   { text-align: left; }
+.ta-center { text-align: center; }
+.ta-right  { text-align: right; }
+.ta-end    { text-align: end; }
 
 .table {
 	display: table;
