@@ -309,8 +309,8 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
         if client.tx_buf.is_empty() {
             match client.comms.rep_rx.try_recv() {
                 Ok(msg) => {
-                    let sz_in = client.write_packet(&mut crypto, msg)?;
-                    let sz_out = client.drain_write()?;
+                    client.write_packet(&mut crypto, msg)?;
+                    client.drain_write()?;
                 },
 
                 Err(TryRecvError::Empty) => {/* this is fine */},
