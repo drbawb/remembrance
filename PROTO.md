@@ -1,10 +1,10 @@
 # Wire Format
 
-Currently we support one transport, [WebSocket][ws-rfc], used as a reliable,
-bidirectional communication channel between the daemons & controller. The peers
-exchange binary frames with each other using the protocol described in this
-document. Multi-byte primitives are sent over the wire in big endian order
-unless otherwise specified.
+Currently we support one transport, TCP using the [Noise Protocol
+Framework][ns-rfc], used as a reliable, bidirectional communication channel
+between the daemons & controller. The peers exchange binary frames with each
+other using the protocol described in this document. Multi-byte primitives are
+sent over the wire in big endian order unless otherwise specified.
 
 The following primitives exist:
 
@@ -20,29 +20,37 @@ u64 : 64-bit be word
 [ascii;n]  : [u8;n] interpreted as ascii string
 ```
 
-## WebSocket Transport
+## TCP Transport
 
-The transport should be kept-alive by the `controller` periodically sending
-`ping` control frames, and the `daemon` responding automatically with a `pong`
-control frame. These control frames are unauthenticated and outside the scope
-of the packet encoding described below. (The following packet authentication
-scheme will only be applied to `binary` frames.)
+The transport is periodically kept alive via the controller sending 
+`EventReq::Ping` messages at regular intervals to test connection liveness.
 
-Each binary frame should contain a payload of the following opaque format:
+The connection initialization involves setting up an encrypted `Noise` channel
+with the following configuration: `Noise_KK_25519_ChaChaPoly_BLAKE2s`. Early
+packets for performing this handshake are prefixed with a big-endian u16 length,
+followed by the contents as specified by the Noise protocol framework.
+
+If an authenticated channel is unable to be established the peers MUST 
+disconnect immediately. As soon as the handshake is complete the peers will
+transition to sending packet headers as described below, followed by payloads
+which are typically JSON-encoded bitstrings.
+
+Each frame should contain a payload of the following opaque format:
 
 ```
 header:
 nonce    : [u8; 16] ;; 128-bit unsigned integer
 expiry   : u64      ;; 64-bit unix timestamp (seconds from epoch)
-sig_len  : u16      ;; signature length, always =64
+flags    : u32      ;; flag word used for multi-part messages etc.
 pay_len  : u16      ;; payload length, should be <= (64 * 1024)
-reserved : u16      ;; reserved word for future flags
 reserved : u16      ;; reserved word for future flags
 
 payload:
-[u8; sig_len] : buf_sig
 [u8; pay_len] : buf_payload
-[u8; ...]     : any contents after `pay_len` is ignored and unauthenticated
+
+add'l payload:
+[u8; ...]     : any contents after `pay_len` is invalid unless the `flags` or 
+                `reserved` registers reference data in this region.
 ```
 
 The packet header totals `32 bytes` on the wire and it should be read in its
@@ -50,19 +58,21 @@ entirety before processing the payload below. The payload should be considered
 as untrusted until the procedure described below has been completed and is
 free from error.
 
-The `sig_len` field allows for a variable sized signature, a capability
-reserved for future expansion. `sig_len` is typically 64-bytes and `buf_sig`
-should be interpreted as a signature produced with an `ed25519` signing key.
-(This field may be reinterpreted or ignored if any of the `reserved` words are
-set and the sender/receiver use them to negotiate selection of some other
-signature.)
+The maximum message length for a payload is therefore `u16::MAX - 32` bytes,
+attempting to send a packet with a payload larger than this MUST be rejected
+by a conforming receiver.
 
-This key is shared using some identity mechanism out-of-band. In the WebSocket
-transport this is accomplished by setting the `x-cyrene-id` header on the
-initial HTTP request which will be upgraded by this transport.
+To send such payloads set the lowest bit of `flags` to 1, a conforming receiver
+must buffer any such messages internally until it receives the final packet
+which has the lowest continuation bit of `flags` cleared. All packets for a
+given sequence MUST: (a) have the same nonce, which a receiver may associate
+with a buffer, and (b) be sent in the order in which they are to be reassembled.
 
-Two 16-bit words are reserved for future expansion. A conforming parser must
-check these flags. All parsers must support this base format (0x0000; 0x0000).
+It is permissible to interleave packets from unrelated messages, a receiver
+MUST use the nonce to ensure that it does not assemble unrelated message texts 
+into a logical packet.
+
+This key is shared using some identity mechanism out-of-band.
 
 _A/N: TODO ;; error message format_
 
@@ -74,6 +84,7 @@ the version specified in the `PLACEHOLDER: APP_NEGOTIATE_VER` message.
 Messages during the initial handshake *MUST* be sent without reserved flags
 until a version negotiation packet (or packet sequence) passes authentication
 and deserialization.
+
 
 ### Early Verification
 
@@ -228,6 +239,5 @@ c. locks and updates the daemon's state such that the handled correlation ID
    is removed from the list of pending submissions.
 
 
-[ws-rfc]: https://datatracker.ietf.org/doc/html/rfc6455
-
+[ns-rfc]: https://noiseprotocol.org/noise.pdf
 

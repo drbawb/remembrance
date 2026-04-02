@@ -11,7 +11,6 @@ pub struct Packet<T> {
     pub msg: T,
 }
 
-
 // impl<T: fmt::Debug> fmt::Debug for Packet<T> {
 //     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 //         write!(f, "ttl {}", self.ttl)?;

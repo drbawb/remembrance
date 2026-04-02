@@ -14,10 +14,6 @@ pub mod msg;
 
 mod tcp;
 
-enum BusEvent {
-    NewConfig { cfg: DaemonConfig },
-}
-
 #[derive(Debug)]
 struct Ratchet {
     last_start: Instant,
@@ -100,6 +96,7 @@ pub fn run_command_queue() -> Result<String> {
                 .inspect_err(|err| { eprintln!("w/s thread panic: {err:?}") })
                 .ok().expect("ws panic exit"); // TODO: supervisor trap exit
 
+            println!("ws exit: {ws_result:?}");
             // let rx_rep_q = ws_result
             //     .inspect_err(|err| { eprintln!("w/s fatal error: {err:?}") })
             //     .ok().expect("ws fatal exit"); // TODO: supervisor trap exit
@@ -117,6 +114,7 @@ pub fn run_command_queue() -> Result<String> {
             // };
 
             thread_ws = thread::spawn(move || {
+                thread::sleep(Duration::from_secs(30));
                 todo!("restart monitor")
                 // start_socket_thread(ws_init)
             });

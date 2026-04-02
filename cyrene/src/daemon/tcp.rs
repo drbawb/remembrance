@@ -1,18 +1,18 @@
 use bytes::{Buf, BufMut, BytesMut};
-use byteorder::{NetworkEndian as NE, ReadBytesExt, WriteBytesExt};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use data_encoding::BASE64;
 use mio::{Events, Interest, Poll, Token};
-use mio::event::Event;
 use mio::net::TcpStream;
+use snow::TransportState;
 use thiserror::Error;
 
 use crate::config::{self, DaemonConfig};
+use crate::daemon::msg::CorrelationId;
 use super::err;
 use super::{EventReq, EventRep, Packet};
 
-use std::io::{self, Cursor, Read, Write};
-use std::net::{self, SocketAddr};
+use std::io::{self,Read, Write};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 static NOISE_INIT: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
@@ -44,11 +44,11 @@ pub enum ClientError {
     #[error("crypto error: {0}")]
     BadCrypto(#[from] snow::Error),
 
+    #[error("de/serialization failur: {0}")]
+    CodecError(#[from] serde_json::Error),
+
     #[error("handshake error: {0}")]
     HandshakeFail(String),
-
-    #[error("error reading file: {0}")]
-    FileIo(io::Error),
 
     #[error("error reading socket: {0}")]
     NetIo(io::Error),
@@ -70,9 +70,13 @@ pub enum ClientError {
 pub struct Client {
     cfg: DaemonConfig,
     comms: ClientInit,
+    token: Token,
 
     conn_p: Poll,
     conn_s: TcpStream,
+
+    rx_buf: BytesMut,
+    tx_buf: BytesMut,
 }
 
 impl Client {
@@ -88,19 +92,235 @@ impl Client {
 
         println!("opening socket to {addr:?} ...");
         let conn_s = TcpStream::connect(addr).map_err(|e| ClientError::NetIo(e))?;
+        let rx_buf = BytesMut::with_capacity(128 * 1024);
+        let tx_buf = BytesMut::with_capacity(128 * 1024);
 
-        Ok(Self { cfg, comms, conn_p, conn_s })
+        Ok(Self {
+            token: Token(0),
+
+            cfg, comms,
+            conn_p, conn_s,
+            rx_buf, tx_buf
+        })
     }
+
+    fn drain_read(&mut self) -> Result<usize, ClientError> {
+        let mut bytes_read = 0;
+        let mut buf = BytesMut::zeroed(2048);
+
+        'drain: loop {
+            match self.conn_s.read(&mut buf) {
+                Ok(0) => { break 'drain },
+
+                Ok(sz) => {
+                    bytes_read += sz;
+                    self.rx_buf.put(&buf[..sz]);
+                    continue 'drain
+                },
+
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::Interrupted { continue 'drain }
+                    if e.kind() == io::ErrorKind::WouldBlock  { break 'drain }
+                    return Err(ClientError::NetIo(e));
+                },
+            }
+        }
+
+        Ok(bytes_read)
+    }
+
+    fn drain_write(&mut self) -> Result<usize, ClientError> {
+        if self.tx_buf.is_empty() { return Ok(0) }
+
+        let mut bytes_written = 0;
+
+        'drain: loop {
+            match self.conn_s.write(&mut self.tx_buf) {
+                Ok(0) => { break 'drain },
+
+                Ok(sz) => {
+                    bytes_written += sz; 
+                    self.tx_buf.advance(sz);
+                    continue 'drain 
+                },
+
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::Interrupted { continue 'drain }
+                    if e.kind() == io::ErrorKind::WouldBlock  { break 'drain }
+                    return Err(ClientError::NetIo(e));
+                },
+            }
+        }
+
+        // TODO: cache/debounce this? not sure how expensive it is ...
+        if self.tx_buf.remaining() > 0 {
+            self.conn_p.registry()
+                .reregister(&mut self.conn_s, self.token, Interest::READABLE | Interest::WRITABLE)
+                .map_err(|e| ClientError::NetIo(e))?;
+        } else {
+            self.conn_p.registry()
+                .reregister(&mut self.conn_s, self.token, Interest::READABLE)
+                .map_err(|e| ClientError::NetIo(e))?;
+        }
+
+        Ok(bytes_written)
+    }
+
+    fn debug_packet<T: Buf>(mut buf: T) {
+        if buf.remaining() < 32 { return; }
+
+        println!("---");
+        println!("nonce [{:016x}]", buf.get_u128());
+        println!("ttl   [{:08x}]", buf.get_u64());
+        println!("flags [{:04x}]", buf.get_u32());
+        println!("rs    [{:02x}] len [{:02x}]", buf.get_u16(), buf.get_u16());
+        println!("---");
+    }
+
+    fn write_packet(
+        &mut self, 
+        crypto: &mut TransportState, 
+        packet: Packet<EventRep>) -> Result<usize, ClientError> {
+
+        let json_buf = serde_json::to_string(&packet.msg)?;
+
+        if json_buf.len() > (u16::MAX - 32) as usize {
+            todo!("need to set continuation flag")
+        }
+
+        // write header
+        self.tx_buf.put_u128(packet.nonce.0);
+        self.tx_buf.put_u64(packet.ttl);
+        self.tx_buf.put_u32(0 /* flags */); // TODO: packet continuation
+        self.tx_buf.put_u16(0 /* rsvd */);
+        self.tx_buf.put_u16(json_buf.len() as u16);
+
+        // write encrypted message
+        let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
+        let sz = crypto.write_message(json_buf.as_bytes(), &mut packet_buf)?;
+        self.tx_buf.put(&packet_buf[..sz]);
+
+        Ok(sz + 32)
+    }
+
+    fn try_recv_packet(&mut self, crypto: &mut TransportState) -> Result<Option<Packet<EventReq>>, ClientError> {
+        // need at least a full packet header:
+        if self.rx_buf.len() < 32 { return Ok(None) }
+
+        // read the header ...
+        let mut rx = self.rx_buf.clone();
+        let nonce = rx.get_u128();
+        let ttl = rx.get_u64();
+        let flags = rx.get_u32();
+        let _rsvd = rx.get_u16();
+        let len = rx.get_u16() as usize;
+
+        // TODO: process continuation flag (aka buffers in your buffers)
+        if (flags & 0x1) != 0 {
+            todo!("continuation packet received & cannot process D:")
+        }
+
+        // don't have the full packet assembled yet:
+        if self.rx_buf.len() < len { return Ok(None) }
+
+        // consume this packet from the receiver buffer
+        println!("rx_buf: {}, need: {}", self.rx_buf.len(), len);
+        Self::debug_packet(self.rx_buf.clone());
+        self.rx_buf.advance(32); // skip the header
+        let packet_bytes = self.rx_buf.split_to(len);
+        
+        // decrypt it w/ noise
+        let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
+        let sz = crypto.read_message(&packet_bytes, &mut packet_buf)
+            .map_err(|e| ClientError::BadCrypto(e))?;
+
+        // TODO: check nonce/ttl
+        println!("decrypted {sz} bytes ...");
+        let event_req = serde_json::from_reader(&packet_buf[..sz])?;
+
+        Ok(Some(Packet {
+            nonce: CorrelationId(nonce), 
+            ttl: ttl,
+            len: Some(sz), 
+            msg: event_req,
+        }))
+    }
+}
+
+#[inline(always)]
+fn err_eof<T>(msg: String) -> Result<T, ClientError> {
+    Err(ClientError::UnexpectedEof(msg))
 }
 
 #[allow(unused_labels)]
 pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
+    // event loop configuration
+    let mut events = Events::with_capacity(128);
+    let client_t = client.token; // NOTE: you may be tempted, but you need this ...
+    
+    // run the event loop to settle the initial Noise handshake ...
+    let mut crypto = perform_handshake(&mut client, client_t)?;
+
+    // then do the real business ...
     println!("starting client event loop ...");
+    assert_eq!(true, client.tx_buf.is_empty());
+    assert_eq!(true, client.rx_buf.is_empty());
+
+    client.conn_p.registry()
+        .reregister(&mut client.conn_s, client_t, Interest::READABLE)
+        .map_err(|e| ClientError::NetIo(e))?;
+
+    let timeout = Duration::from_millis(100);
+
+    'main: loop {
+        if client.tx_buf.is_empty() {
+            match client.comms.rep_rx.try_recv() {
+                Ok(msg) => {
+                    let sz_in = client.write_packet(&mut crypto, msg)?;
+                    println!("encoded {sz_in} bytes");
+
+                    let sz_out = client.drain_write()?;
+                    println!("wrote {sz_out} bytes");
+                },
+
+                Err(TryRecvError::Empty) => {/* this is fine */},
+                Err(err) => return err_eof(format!("reply channel closed unexpectedly: {err:?}")),
+            };
+        }
+
+        if !client.rx_buf.is_empty() {
+            if let Some(packet) = client.try_recv_packet(&mut crypto)? {
+                if let Err(err) = client.comms.req_tx.send(packet) {
+                    return err_eof(format!("request channel closed unexpectedly: {err:?}"));
+                }
+            }
+        }
+
+        client.conn_p.poll(&mut events, Some(timeout)).map_err(|e| ClientError::NetIo(e))?;
+
+        for event in events.iter() {
+            if event.is_read_closed() || event.is_write_closed() {
+                return err_eof(format!("socket was closed without clean disconnect notice D:"));
+            }
+
+            if event.is_readable() {
+                let sz = client.drain_read()?;
+                println!("read  {sz} bytes");
+            }
+
+            if event.is_writable() {
+                let sz = client.drain_write()?;
+                println!("wrote {sz} bytes");
+            }
+        }
+    }
+}
+
+pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<TransportState, ClientError> {
+    println!("starting client handshake ...");
 
     // some loop configuration ...
-    let client_t = Token(0);
     let mut events = Events::with_capacity(128);
-    let tick_ms = Duration::from_millis(100);
 
     // setup the crypto block
     let key_controller = BASE64.decode(client.cfg.controller.pubkey.as_bytes())
@@ -191,19 +411,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
         }
     }
 
-    println!("we're going for real???");
-
-    'main: loop {
-        client.conn_p.poll(&mut events, None).map_err(|e| ClientError::NetIo(e))?;
-
-        for event in events.iter() {
-            if event.is_read_closed() || event.is_write_closed() {
-                return Err(ClientError::UnexpectedEof("server closed connection without saying goodbye D:".into()));
-            }
-
-
-        }
-    }
+    Ok(responder.into_transport_mode()?)
 }
 
 fn drain_hs_open(hs: &mut HandshakeEngine, conn: &mut TcpStream) -> Result<(), ClientError> {
