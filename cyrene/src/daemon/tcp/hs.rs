@@ -293,3 +293,171 @@ fn drain_hs_close(packet: &mut Bytes, conn: &mut TcpStream) -> Result<bool, Clie
     
     Ok(packet.len() <= 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::{Buf, BufMut, Bytes, BytesMut};
+    use crate::daemon::tcp::{NOISE_INIT};
+    use snow::{HandshakeState, params::NoiseParams};
+    use super::{HandshakeEngine, State};
+
+    
+    fn gen_keypair() -> (Bytes, Bytes) {
+        let noise_parms = NOISE_INIT.parse::<NoiseParams>().expect("parse failure");
+
+        let kp = snow::Builder::new(noise_parms.clone())
+            .generate_keypair().expect("could not build keypair");
+
+        (Bytes::copy_from_slice(&kp.private), Bytes::copy_from_slice(&kp.public))
+    }
+
+    fn get_initiator(private: &[u8], public: &[u8]) -> HandshakeState {
+        let noise_parms = NOISE_INIT.parse::<NoiseParams>().expect("parse failure");
+
+        let initiator = snow::Builder::new(noise_parms)
+            .local_private_key(private).expect("cannot set private key")
+            .remote_public_key(public).expect("cannot set public key")
+            .build_initiator().expect("cannot build responder");
+
+        initiator // output an initiator or PANIC
+    }
+
+    fn get_responder(private: &[u8], public: &[u8]) -> HandshakeState {
+        let noise_parms = NOISE_INIT.parse::<NoiseParams>().expect("parse failure");
+
+        let responder = snow::Builder::new(noise_parms)
+            .local_private_key(private).expect("cannot set private key")
+            .remote_public_key(public).expect("cannot set public key")
+            .build_responder().expect("cannot build responder");
+
+        responder // output a responder or PANIC
+    }
+
+    #[test]
+    fn short_read_len() {
+        let (k_private, k_public) = gen_keypair();
+        let responder = get_responder(&k_private, &k_public);
+
+        let mut hs = HandshakeEngine::new(responder);
+        hs.consume(&[0x2A]).expect("read failed");
+        let advanced = hs.try_advance().expect("advance should not error");
+        assert_eq!(false, advanced);
+        assert_eq!(hs.state, State::NeedPacketLen);
+
+        hs.consume(&[0x45]).expect("read failed");
+        let advanced = hs.try_advance().expect("advance should not error");
+        assert_eq!(true, advanced);
+        assert_eq!(hs.state, State::NeedPacketBody { len: 0x2A45 });
+    }
+
+    #[test]
+    fn attempt_initiate() {
+        let (r_private, r_public) = gen_keypair();
+        let (i_private, i_public) = gen_keypair();
+
+        let responder = get_responder(&r_private, &i_public);
+        let mut hs = HandshakeEngine::new(responder);
+
+        // pretend we're an initiator and write the packet like it would be
+        // on the wire from `snapcon` ...
+        let mut initiator = get_initiator(&i_private, &r_public);
+
+        let mut init_buf = BytesMut::zeroed(1024); 
+        let sz = initiator.write_message(&[], &mut init_buf)
+            .expect("initiator could not write message ...");
+
+        let mut resp_buf = BytesMut::with_capacity(1024);
+        resp_buf.put_u16(sz as u16);
+        resp_buf.put(&init_buf[..sz]);
+
+        // consume the fake wire packet
+        hs.consume(&resp_buf).expect("could not consume");
+        let turn = hs.try_advance().expect("could not advance");
+        assert_eq!(true, turn);
+        assert_eq!(hs.state, State::NeedPacketBody { len: sz });
+
+        let turn = hs.try_advance().expect("could not advance");
+        assert_eq!(true, turn);
+        assert_eq!(hs.state, State::GenerateRequest);
+    }
+
+    #[test]
+    fn attempt_generate() {
+        let (r_private, r_public) = gen_keypair();
+        let (i_private, i_public) = gen_keypair();
+
+        let responder = get_responder(&r_private, &i_public);
+        let mut hs = HandshakeEngine::new(responder);
+
+        // pretend we're an initiator and write the packet like it would be
+        // on the wire from `snapcon` ...
+        let mut initiator = get_initiator(&i_private, &r_public);
+        let mut init_buf = BytesMut::zeroed(1024); 
+        let sz = initiator.write_message(&[], &mut init_buf)
+            .expect("initiator could not write message ...");
+
+        let mut resp_buf = BytesMut::with_capacity(1024);
+        resp_buf.put_u16(sz as u16);
+        resp_buf.put(&init_buf[..sz]);
+
+        // consume the fake wire packet
+        hs.consume(&resp_buf).expect("could not consume");
+        let _ = hs.try_advance().expect("could not advance");
+        let _ = hs.try_advance().expect("could not advance");
+        let turn = hs.try_advance().expect("could not advance");
+        assert_eq!(true, turn);
+        assert_eq!(hs.state, State::DrainResponse);
+
+        let (buf, _) = hs.into_inner().expect("could not generate");
+        assert!(buf.len() > 0);
+    }
+
+    #[test]
+    fn attempt_transport() {
+        let (r_private, r_public) = gen_keypair();
+        let (i_private, i_public) = gen_keypair();
+
+        let responder = get_responder(&r_private, &i_public);
+        let mut hs = HandshakeEngine::new(responder);
+
+        // pretend we're an initiator and write the packet like it would be
+        // on the wire from `snapcon` ...
+        let mut initiator = get_initiator(&i_private, &r_public);
+        let mut init_buf = BytesMut::zeroed(1024); 
+        let sz = initiator.write_message(&[], &mut init_buf)
+            .expect("initiator could not write message ...");
+
+        let mut resp_buf = BytesMut::with_capacity(1024);
+        resp_buf.put_u16(sz as u16);
+        resp_buf.put(&init_buf[..sz]);
+
+        // consume the fake wire packet
+        hs.consume(&resp_buf).expect("could not consume");
+        let _ = hs.try_advance().expect("could not advance");
+        let _ = hs.try_advance().expect("could not advance");
+        let _ = hs.try_advance().expect("could not advance");
+        let (mut buf, responder) = hs.into_inner().expect("could not generate");
+
+        // actually write the response
+        let mut init_buf = BytesMut::zeroed(1024);
+        buf.advance(2); // skip the length needed for TCP frame ...
+        let sz = initiator.read_message(&buf, &mut init_buf)
+            .expect("initiator could not process packet");
+
+        assert_eq!(sz, 0); // NOTE: no additional data from our HS engine ...
+
+        // enter transport mode and verify we can use the channel
+        let mut tx = initiator.into_transport_mode().expect("send could not enter transport");
+        let mut rx = responder.into_transport_mode().expect("recv could not enter transport");
+
+        let mut test_packet = BytesMut::zeroed(1024);
+        let sz = tx.write_message(b"hello, world", &mut test_packet)
+            .expect("failed to write test packet");
+
+        let mut recv_packet = BytesMut::zeroed(1024);
+        let sz = rx.read_message(&test_packet[..sz], &mut recv_packet)
+            .expect("failed to read test packet");
+
+        assert_eq!(b"hello, world", &recv_packet[..sz]);
+    }
+}
