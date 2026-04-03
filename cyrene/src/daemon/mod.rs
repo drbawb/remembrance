@@ -1,17 +1,18 @@
 use blinkedblist::List as Blist;
 use crossbeam_channel::{bounded, Receiver, Sender};
+use mio::Waker;
 
 use std::io::{Read};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-
 use err::*;
 use msg::*;
+use tcp::ClientError;
 
 pub mod err;
 pub mod msg;
-
 mod tcp;
 
 #[derive(Debug)]
@@ -59,10 +60,31 @@ impl Ratchet {
     }
 }
 
+#[derive(Clone, Debug)]
+struct Snooze(Arc<Mutex<Option<Waker>>>);
+
+impl Snooze {
+    pub fn new() -> Self { 
+        Self(Arc::new(Mutex::new(None)))
+    }
+
+    pub fn poke(&self) {
+        let Ok(mut slot) = self.0.lock() else { return };
+        let Some(w) = slot.as_ref() else { return };
+        if let Err(_) = w.wake() { slot.take(); }
+    }
+
+    pub fn reset(&self, w: Waker) { 
+        let Ok(mut slot) = self.0.lock() else { return };
+        slot.replace(w);
+    }
+}
+
 pub fn run_command_queue() -> Result<String> {
     println!("booting daemon ...");
 
     let dmn_init = DaemonInit::new();
+    let tcp_waker = dmn_init.waker.clone();
 
     let thread_evt = thread::spawn(move || {
         let mut kernel = dmn_init.kernel;
@@ -78,6 +100,7 @@ pub fn run_command_queue() -> Result<String> {
         req_tx: dmn_init.tx_req_q.clone(),
         rep_tx: dmn_init.tx_rep_q.clone(),
         rep_rx: dmn_init.rx_sub_q.clone(),
+        waker: tcp_waker.clone(),
     };
 
     let mut ratchet_ws = Ratchet::new();
@@ -92,12 +115,19 @@ pub fn run_command_queue() -> Result<String> {
         thread::sleep(Duration::from_millis(1000));
 
         if thread_ws.is_finished() {
-            let ws_result = thread_ws.join()
+            let tcp_result = thread_ws.join()
                 .inspect_err(|err| { eprintln!("w/s thread panic: {err:?}") })
-                .ok().expect("ws panic exit"); // TODO: supervisor trap exit
+                .ok().expect("w/s thread panicked");
 
-            ws_result.inspect_err(|err| { eprintln!("w/s thread error: {err:?}") })
-                .ok().expect("ws fatal exit"); // TODO: supervisor trap exit
+            match tcp_result {
+                Ok(_) => { /* fine */},
+
+                Err(ClientError::UnexpectedEof(msg) ) => {
+                    eprintln!("w/s disconnect: {msg:?}");
+                },
+
+                _ => { todo!("unhandled w/s error") }
+            }
 
             // apply backoff
             thread::sleep(ratchet_ws.wait());
@@ -108,8 +138,8 @@ pub fn run_command_queue() -> Result<String> {
                 req_tx: dmn_init.tx_req_q.clone(),
                 rep_tx: dmn_init.tx_rep_q.clone(),
                 rep_rx: dmn_init.rx_sub_q.clone(),
+                waker: tcp_waker.clone(),
             };
-
 
             thread_ws = thread::spawn(move || {
                 let client = tcp::Client::new(tcp_init)
@@ -139,6 +169,7 @@ pub struct DaemonKernel {
     sub_q: Sender<Packet<EventRep>>,
 
     pending: Blist<CorrelationId>,
+    waker: Snooze,
 
     tx_wkr_q: Sender<Packet<EventReq>>,
     rx_wkr_q: Receiver<Packet<EventReq>>,
@@ -146,6 +177,7 @@ pub struct DaemonKernel {
 
 pub struct DaemonInit {
     kernel: DaemonKernel,
+    waker: Snooze,
 
     tx_req_q: Sender<Packet<EventReq>>,
     tx_rep_q: Sender<Packet<EventRep>>,
@@ -157,11 +189,13 @@ impl DaemonInit {
         let (tx_req_q, rx_req_q) = bounded(8);
         let (tx_rep_q, rx_rep_q) = bounded(1024);
         let (tx_wkr_q, rx_wkr_q) = bounded(32);
+        let waker = Snooze::new();
 
         let fresh_instance = DaemonKernel {
             req_q: rx_req_q,
             sub_q: tx_rep_q.clone(),
             pending: Blist::new(),
+            waker: waker.clone(),
 
             tx_wkr_q, rx_wkr_q,
         };
@@ -169,6 +203,7 @@ impl DaemonInit {
 
         Self {
             kernel: fresh_instance,
+            waker: waker.clone(),
             tx_req_q: tx_req_q,
             tx_rep_q: tx_rep_q.clone(),
             rx_sub_q: rx_rep_q,
@@ -187,10 +222,11 @@ impl DaemonKernel {
         for i in 0..4 {
             let worker_rx = self.rx_wkr_q.clone();
             let worker_tx = self.sub_q.clone();
+            let worker_wk = self.waker.clone();
             let worker_h = thread::spawn(move || {
                 println!("starting worker: {i}");
 
-                if let Err(msg) = DaemonKernel::sub_task_loop(worker_rx, worker_tx) {
+                if let Err(msg) = DaemonKernel::sub_task_loop(worker_rx, worker_tx, worker_wk) {
                     eprintln!("sub task loop exited with err: {msg:?}");
                 }
 
@@ -229,7 +265,11 @@ impl DaemonKernel {
         Ok(())
     }
 
-    fn sub_task_loop(task_rx: Receiver<Packet<EventReq>>, sub_q: Sender<Packet<EventRep>>) -> Result<()> {
+    fn sub_task_loop(
+        task_rx: Receiver<Packet<EventReq>>,
+        sub_q: Sender<Packet<EventRep>>,
+        waker: Snooze,
+    ) -> Result<()> {
         use EventReq as Ty;
         use std::process::{Command, Stdio};
 
@@ -294,6 +334,8 @@ impl DaemonKernel {
                     sub_q.send(out_p)
                          .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
                          .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
+
+                    waker.poke()
                 },
 
                 _ => { eprintln!("worker should not have been sent {msg:?}"); }
@@ -339,13 +381,15 @@ impl DaemonKernel {
                 self.sub_q
                     .send(out_p)
                     .map_err(|_| RunError::RxDisconnected("dmn->ws submission queue".into()))?;
+
+                self.waker.poke()
             },
 
             Ty::ZfsListDataset(..) => {
                 self.tx_wkr_q
                     .send(event)
                     .map_err(|_| RunError::RxDisconnected("dmn->wkr task queue".into()))?;
-            }, 
+            },
         }
 
         Ok(())

@@ -103,6 +103,15 @@ defmodule Snapcon.TcpServer do
   end
 
   @impl ThousandIsland.Handler
+  def handle_timeout(_socket, state) do
+    Logger.error "socket timed out :: #{inspect(state)}"
+
+    if Map.has_key?(state.assigns, :name) do
+      :ok = DaemonServ.remove_host(state.assigns[:name])
+    end
+  end
+
+  @impl ThousandIsland.Handler
   def handle_data(data, _socket, state) do
     state = read_packet(state, data)
     {:continue, state}

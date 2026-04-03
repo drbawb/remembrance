@@ -1,18 +1,18 @@
 use bytes::{Buf, BufMut, BytesMut};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use mio::{Events, Interest, Poll, Token};
+use mio::{Events, Interest, Poll, Token, Waker};
 use mio::net::TcpStream;
 use snow::TransportState;
 use thiserror::Error;
 
 use crate::config::{self, DaemonConfig};
+use crate::daemon::Snooze;
 use crate::daemon::msg::CorrelationId;
 use super::err;
 use super::{EventReq, EventRep, Packet};
 
 use std::io::{self,Read, Write};
 use std::net::SocketAddr;
-use std::time::Duration;
 
 mod hs;
 
@@ -36,6 +36,7 @@ pub struct ClientInit {
     pub req_tx: Sender<Packet<EventReq>>,
     pub rep_tx: Sender<Packet<EventRep>>,
     pub rep_rx: Receiver<Packet<EventRep>>,
+    pub waker: Snooze,
 }
 
 #[derive(Error, Debug)]
@@ -305,7 +306,11 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
         .reregister(&mut client.conn_s, client_t, Interest::READABLE)
         .map_err(|e| ClientError::NetIo(e))?;
 
-    let timeout = Duration::from_millis(10);
+    // schedule the daemon to wake us up
+    let waker = Waker::new(client.conn_p.registry(), Token(1))
+        .map_err(|e| ClientError::NetIo(e))?;
+
+    client.comms.waker.reset(waker);
 
     'main: loop {
         if client.tx_buf.is_empty() {
@@ -328,9 +333,15 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
             }
         }
 
-        client.conn_p.poll(&mut events, Some(timeout)).map_err(|e| ClientError::NetIo(e))?;
+        client.conn_p.poll(&mut events, None).map_err(|e| ClientError::NetIo(e))?;
 
         for event in events.iter() {
+            match event.token() {
+                Token(0) => { /* socket activity */ },
+                Token(1) => { /* daemon wakeup   */           continue 'main },
+                Token(n) => { eprintln!("unknown token {n}"); continue 'main }
+            }
+
             if event.is_read_closed() || event.is_write_closed() {
                 return err_eof(format!("socket was closed without clean disconnect notice D:"));
             }
