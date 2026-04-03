@@ -3,6 +3,7 @@ use data_encoding::BASE64;
 use mio::{Events, Interest, Token};
 use mio::net::TcpStream;
 use snow::{HandshakeState, TransportState};
+use tracing::{info, error};
 
 use std::io::{self,Read, Write};
 
@@ -149,7 +150,7 @@ impl HandshakeEngine {
         // create our response ...
         let mut hs_output = BytesMut::zeroed(1024); // TODO: no guarantee this is big enough?
         let hs_sz = self.responder.write_message(&[], &mut hs_output)
-            .inspect_err(|e| eprintln!("unexpected i/o error writing handshake {e:?}"))?;
+            .inspect_err(|e| error!("unexpected i/o error writing handshake {e:?}"))?;
 
         // generate a wire packet in tx_buf ...
         assert!(hs_sz < u16::MAX as usize);
@@ -164,7 +165,7 @@ impl HandshakeEngine {
 /// Temporarily borrows a `Client` and uses its TCP stream to negotiate a Noise session.
 ///
 pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<TransportState, ClientError> {
-    println!("starting client handshake ...");
+    info!("starting client handshake ...");
 
     // some loop configuration ...
     let mut events = Events::with_capacity(128);

@@ -5,17 +5,19 @@ edition = "2024"
 license = "BSD-3-Clause"
 
 [dependencies]
-anyhow = { version = "1.0.102", features = ["backtrace"] }
+anyhow = { version = "1.0", features = ["backtrace"] }
 # bitflags = "2.11.0"
 blinkedblist = { git = "https://git.sr.ht/~hime/blinkedblist" }
-bytes = "1.11.1"
-clap = { version = "4.6.0", features = ["derive"] }
-crossbeam-channel = "0.5.15"
-data-encoding = "2.10.0"
-mio = { version = "1.2.0", features = ["net", "os-poll"] }
+bytes = "1.11"
+clap = { version = "4.6", features = ["derive"] }
+crossbeam-channel = "0.5"
+data-encoding = "2.10"
+mio = { version = "1.2", features = ["net", "os-poll"] }
 rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.149"
-snow = "0.10.0"
-thiserror = "2.0.18"
-toml = "1.0.6"
+serde_json = "1.0"
+snow = "0.10"
+thiserror = "2.0"
+toml = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"

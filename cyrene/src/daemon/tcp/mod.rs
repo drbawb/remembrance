@@ -4,6 +4,7 @@ use mio::{Events, Interest, Poll, Token, Waker};
 use mio::net::TcpStream;
 use snow::TransportState;
 use thiserror::Error;
+use tracing::{info, error};
 
 use crate::config::{self, DaemonConfig};
 use crate::daemon::Snooze;
@@ -83,7 +84,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(comms: ClientInit) -> Result<Self, ClientError> {
-        println!("connecting to controller ...");
+        info!("connecting to controller ...");
         let cfg = config::read_cached_file()?;
         let conn_p = Poll::new().map_err(ClientError::NetIo)?;
 
@@ -92,7 +93,7 @@ impl Client {
             ClientError::BadConfig(msg)
         })?;
 
-        println!("opening socket to {addr:?} ...");
+        info!("opening socket to {addr:?} ...");
         let conn_s = TcpStream::connect(addr).map_err(ClientError::NetIo)?;
         let rx_buf = BytesMut::with_capacity(128 * 1024);
         let tx_buf = BytesMut::with_capacity(128 * 1024);
@@ -172,12 +173,12 @@ impl Client {
     fn debug_packet<T: Buf>(mut buf: T) {
         if buf.remaining() < 32 { return; }
 
-        println!("---");
-        println!("nonce [{:016x}]", buf.get_u128());
-        println!("ttl   [{:08x}]", buf.get_u64());
-        println!("flags [{:04x}]", buf.get_u32());
-        println!("rs    [{:02x}] len [{:02x}]", buf.get_u16(), buf.get_u16());
-        println!("---");
+        info!("---");
+        info!("nonce [{:016x}]", buf.get_u128());
+        info!("ttl   [{:08x}]", buf.get_u64());
+        info!("flags [{:04x}]", buf.get_u32());
+        info!("rs    [{:02x}] len [{:02x}]", buf.get_u16(), buf.get_u16());
+        info!("---");
     }
 
     /// Encrypts & formats a reply packet for the wire, returning the
@@ -296,7 +297,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
     let mut crypto = hs::perform_handshake(&mut client, client_t)?;
 
     // then do the real business ...
-    println!("starting client event loop ...");
+    info!("starting client event loop ...");
     assert!(client.tx_buf.is_empty());
     assert!(client.rx_buf.is_empty());
 
@@ -337,7 +338,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
             match event.token() {
                 Token(0) => { /* socket activity */ },
                 Token(1) => { /* daemon wakeup   */           continue 'main },
-                Token(n) => { eprintln!("unknown token {n}"); continue 'main }
+                Token(n) => { error!("unknown token {n}"); continue 'main }
             }
 
             if event.is_read_closed() || event.is_write_closed() {

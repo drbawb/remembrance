@@ -1,8 +1,10 @@
+use daemon::msg::*;
+
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use data_encoding::BASE64;
-
-use daemon::msg::*;
+use tracing::{info, error};
+use tracing_subscriber;
 
 use std::io;
 use std::process::ExitCode;
@@ -38,16 +40,23 @@ struct PubkeyArgs {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
+    tracing_subscriber::fmt::init();
 
+    let cli_result = match cli.command {
+        Commands::Run(args) => entry_run(args),
 
-    Ok(match cli.command {
-        Commands::Run(args) => entry_run(args)?,
+        Commands::Test => entry_test(),
 
-        Commands::Test => entry_test()?,
+        Commands::Genkey => entry_genkey(),
+        Commands::Pubkey => entry_pubkey(),
+    };
 
-        Commands::Genkey => entry_genkey()?,
-        Commands::Pubkey => entry_pubkey()?,
-    })
+    if let Err(msg) = cli_result {
+        error!("command exited with error: {msg:?}");
+        return Err(msg);
+    }
+
+    Ok(cli_result.expect("should have been OK"))
 }
 
 fn entry_test() -> Result<ExitCode> {
@@ -62,13 +71,13 @@ fn entry_test() -> Result<ExitCode> {
     });
 
     let buf = serde_json::to_string(&msg)?;
-    println!("json: {buf:?}");
+    info!("json:\n{buf:?}\n---");
 
     Ok(ExitCode::from(0))
 }
 
 fn entry_run(args: RunArgs) -> Result<ExitCode> {
-    println!("starting daemon on: {}", args.listen_addr);
+    info!("starting daemon on: {}", args.listen_addr);
 
     daemon::run_command_queue()?;
 

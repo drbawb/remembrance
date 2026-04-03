@@ -1,6 +1,7 @@
 use blinkedblist::List as Blist;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use mio::Waker;
+use tracing::{info, error};
 
 use std::io::{Read};
 use std::sync::{Arc, Mutex};
@@ -55,7 +56,7 @@ impl Ratchet {
             let prev_rt_s = self.restart_secs;
             self.restart_secs = u64::max( 1, self.restart_secs.saturating_sub(self.ratchet_secs));
             self.ratchet_secs = u64::min(30, self.ratchet_secs * 2);
-            eprintln!("backoff reduced from {}s => {}s", prev_rt_s, self.restart_secs);
+            error!("backoff reduced from {}s => {}s", prev_rt_s, self.restart_secs);
         }
     }
 }
@@ -81,7 +82,7 @@ impl Snooze {
 }
 
 pub fn run_command_queue() -> Result<String> {
-    println!("booting daemon ...");
+    info!("booting daemon ...");
 
     let dmn_init = DaemonInit::new();
     let tcp_waker = dmn_init.waker.clone();
@@ -116,14 +117,14 @@ pub fn run_command_queue() -> Result<String> {
 
         if thread_ws.is_finished() {
             let tcp_result = thread_ws.join()
-                .inspect_err(|err| { eprintln!("w/s thread panic: {err:?}") })
+                .inspect_err(|err| { error!("w/s thread panic: {err:?}") })
                 .expect("w/s thread panicked");
 
             match tcp_result {
                 Ok(_) => { /* fine */},
 
                 Err(ClientError::UnexpectedEof(msg) ) => {
-                    eprintln!("w/s disconnect: {msg:?}");
+                    error!("w/s disconnect: {msg:?}");
                 },
 
                 _ => { todo!("unhandled w/s error") }
@@ -156,7 +157,7 @@ pub fn run_command_queue() -> Result<String> {
 
         if thread_evt.is_finished() {
             if let Err(msg) = thread_evt.join() {
-                eprintln!("daemon exited, tearing it down: {msg:?}");
+                error!("daemon exited, tearing it down: {msg:?}");
             }
 
             todo!("ability to restart daemon?");
@@ -213,7 +214,7 @@ impl DaemonInit {
 
 impl DaemonKernel {
     pub fn event_loop(&mut self) -> Result<()> {
-        println!("daemon event loop running ...");
+        info!("daemon event loop running ...");
         let fr_budget_ms = Duration::from_millis(1000 / 100);
 
         let mut workers = vec![];
@@ -224,13 +225,13 @@ impl DaemonKernel {
             let worker_tx = self.sub_q.clone();
             let worker_wk = self.waker.clone();
             let worker_h = thread::spawn(move || {
-                println!("starting worker: {i}");
+                info!("starting worker: {i}");
 
                 if let Err(msg) = DaemonKernel::sub_task_loop(worker_rx, worker_tx, worker_wk) {
-                    eprintln!("sub task loop exited with err: {msg:?}");
+                    error!("sub task loop exited with err: {msg:?}");
                 }
 
-                eprintln!("warning worker has exited: {i}");
+                error!("warning worker has exited: {i}");
             });
 
             workers.push(worker_h);
@@ -248,7 +249,7 @@ impl DaemonKernel {
             let fr_end_t = fr_beg.elapsed();
 
             if fr_end_t > fr_budget_ms {
-                eprintln!("event loop blocked {}ms", fr_end_t.as_millis()); 
+                error!("event loop blocked {}ms", fr_end_t.as_millis()); 
             }
 
             thread::sleep(fr_budget_ms.saturating_sub(fr_end_t));
@@ -275,12 +276,12 @@ impl DaemonKernel {
 
         loop {
             let packet = task_rx.recv().expect("failed to work steal request");
-            println!("daemon [wkr] [pkt]: {packet:?}");
+            info!("daemon [wkr] [pkt]: {packet:?}");
             let Packet { nonce, msg, .. } = packet;
 
             match msg {
                 Ty::ZfsListDataset(args) => {
-                    println!("zfs list :: {args:?}");
+                    info!("zfs list :: {args:?}");
                     let mut cmd = Command::new("zfs"); 
 
                     cmd.arg("list")
@@ -305,12 +306,12 @@ impl DaemonKernel {
                     let status = subproc.wait()?;
 
                     if !status.success() {
-                        eprintln!("zfs list failed");
+                        error!("zfs list failed");
                         return Ok(())
                     }
 
                     if subproc.stdout.is_none() {
-                        eprintln!("no output from zfs?");
+                        error!("no output from zfs?");
                         return Ok(())
                     }
 
@@ -321,8 +322,8 @@ impl DaemonKernel {
                                        .expect("subproc stdout not available")
                                        .read_to_string(&mut buf)?;
 
-                    println!("({buf_n}b) response from ZFS");
-                    println!("acknowledging {nonce:?}");
+                    info!("({buf_n}b) response from ZFS");
+                    info!("acknowledging {nonce:?}");
                     let new_ttl = Packet::calc_ttl(30);
 
                     let list = buf.lines()
@@ -332,13 +333,13 @@ impl DaemonKernel {
                     let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsList { list });
 
                     sub_q.send(out_p)
-                         .inspect_err(|err| eprintln!("daemon->ws error: {err:?}"))
+                         .inspect_err(|err| error!("daemon->ws error: {err:?}"))
                          .map_err(|_| RunError::Misc("ws reply queue disconnected".into()))?;
 
                     waker.poke()
                 },
 
-                _ => { eprintln!("worker should not have been sent {msg:?}"); }
+                _ => { error!("worker should not have been sent {msg:?}"); }
             }
         }
     }
@@ -360,23 +361,23 @@ impl DaemonKernel {
     fn process_message(&mut self, event: Packet<EventReq>) -> Result<()> {
         use EventReq as Ty;
 
-        println!("daemon [ in] [pkt]: {event:?}");
+        info!("daemon [ in] [pkt]: {event:?}");
         let Packet { ref msg, .. } = event;
 
         match msg {
-            Ty::Ping { msg } => { println!("ping: {msg}") },
+            Ty::Ping { msg } => { info!("ping: {msg}") },
 
             &Ty::Ident { version } => {
                 if version != 0x1001 {
-                    eprintln!("ident request for unknown version {:04x}", version);
+                    error!("ident request for unknown version {:04x}", version);
                     return Err(RunError::Misc("ident version failure".into()));
                 }
 
-                println!("request to authenticate processed ;; starting v{version}");
+                info!("request to authenticate processed ;; starting v{version}");
 
                 let event = EventRep::Ident { version, name: "hitomi".into() };
                 let out_p = msg::build_packet(event);
-                println!("daemon [out] [pkt]: {out_p:?}");
+                info!("daemon [out] [pkt]: {out_p:?}");
 
                 self.sub_q
                     .send(out_p)
