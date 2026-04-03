@@ -1,7 +1,7 @@
 use blinkedblist::List as Blist;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use mio::Waker;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 
 use std::io::{Read};
 use std::sync::{Arc, Mutex};
@@ -56,7 +56,7 @@ impl Ratchet {
             let prev_rt_s = self.restart_secs;
             self.restart_secs = u64::max( 1, self.restart_secs.saturating_sub(self.ratchet_secs));
             self.ratchet_secs = u64::min(30, self.ratchet_secs * 2);
-            error!("backoff reduced from {}s => {}s", prev_rt_s, self.restart_secs);
+            warn!("backoff reduced from {}s => {}s", prev_rt_s, self.restart_secs);
         }
     }
 }

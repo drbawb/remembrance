@@ -329,6 +329,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
         if !client.rx_buf.is_empty()
         && let Some(packet) = client.try_recv_packet(&mut crypto)?
         && let Err(err) = client.comms.req_tx.send(packet) {
+            // TODO: deregister & recreate a TCP stream internally instead of crashing the thread ...
             return err_eof(format!("request channel closed unexpectedly: {err:?}"));
         }
 

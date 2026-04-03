@@ -62,8 +62,8 @@ fn main() -> Result<ExitCode> {
 fn entry_test() -> Result<ExitCode> {
     use daemon::msg::EventReq;
 
-    // let msg = EventReq::Ident { version: 0x1001 };
-    let msg = EventReq::ZfsListDataset(ZfsListArgs {
+    let msg = EventReq::Ident { version: 0x1001 };
+    let msg2 = EventReq::ZfsListDataset(ZfsListArgs {
         name: None,
         depth: None,
         ent_ty: ZfsListType::All,
@@ -71,7 +71,10 @@ fn entry_test() -> Result<ExitCode> {
     });
 
     let buf = serde_json::to_string(&msg)?;
-    info!("json:\n{buf:?}\n---");
+    info!(buf, "json ident\n");
+
+    let buf = serde_json::to_string(&msg2)?;
+    info!(buf, "json list-datasets\n");
 
     Ok(ExitCode::from(0))
 }
