@@ -245,7 +245,6 @@ mod tests {
     use super::PacketEngine;
 
     use bytes::{Bytes, BytesMut};
-    use serde::Serialize;
     use snow::{HandshakeState, TransportState};
     use snow::params::NoiseParams;
     
@@ -319,19 +318,6 @@ mod tests {
             len: None,
             msg: msg,
         }
-    }
-
-    fn write_ts<T>(ts: &mut TransportState, p: Packet<T>) -> Bytes
-    where T: Serialize {
-        // this helper just avoids us setting up another packet engine to
-        // model the other side ...
-     
-        let message = serde_json::to_string(&p).expect("could not encode");
-        let mut output_buffer = BytesMut::zeroed(64 * 1024);
-        let sz = ts.write_message(&message.as_bytes(), &mut output_buffer)
-            .expect("could not write message to output buffer");
-
-        output_buffer.truncate(sz); output_buffer.freeze()
     }
 
     #[test]

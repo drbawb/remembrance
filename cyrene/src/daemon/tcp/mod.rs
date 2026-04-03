@@ -6,11 +6,9 @@ use thiserror::Error;
 use tracing::{info, error};
 
 use crate::config::{self, DaemonConfig};
-use crate::daemon::Snooze;
-use crate::daemon::tcp::wire::PacketError;
-use super::err;
+use super::{err, Snooze};
 use super::{EventReq, EventRep, Packet};
-use wire::PacketEngine;
+use wire::{PacketEngine, PacketError};
 
 use std::io;
 use std::net::SocketAddr;
