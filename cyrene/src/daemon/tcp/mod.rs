@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use mio::{Events, Interest, Poll, Token, Waker};
 use mio::net::TcpStream;
@@ -12,7 +12,7 @@ use super::err;
 use super::{EventReq, EventRep, Packet};
 use wire::PacketEngine;
 
-use std::io::{self, Write};
+use std::io;
 use std::net::SocketAddr;
 
 mod hs;
@@ -79,7 +79,6 @@ pub struct Client {
     conn_p: Poll,
     conn_s: TcpStream,
 
-    engine: PacketEngine<EventReq>,
     tx_buf: BytesMut,
 }
 
@@ -104,46 +103,19 @@ impl Client {
             cfg, comms,
             conn_p, conn_s,
             tx_buf,
-
-            engine: PacketEngine::new(),
         })
     }
 
-    fn drain_write(&mut self) -> Result<usize, ClientError> {
-        if self.tx_buf.is_empty() { return Ok(0) }
+    fn register_writable(&mut self, is_empty: bool) -> Result<(), ClientError> {
+        let interest = 
+            if is_empty { Interest::READABLE } 
+            else        { Interest::READABLE | Interest::WRITABLE };
 
-        let mut bytes_written = 0;
+        self.conn_p.registry()
+            .reregister(&mut self.conn_s, self.token, interest)
+            .map_err(ClientError::NetIo)?;
 
-        'drain: loop {
-            match self.conn_s.write(&self.tx_buf) {
-                Ok(0) => { break 'drain },
-
-                Ok(sz) => {
-                    bytes_written += sz;
-                    self.tx_buf.advance(sz);
-                    continue 'drain
-                },
-
-                Err(e) => {
-                    if e.kind() == io::ErrorKind::Interrupted { continue 'drain }
-                    if e.kind() == io::ErrorKind::WouldBlock  { break 'drain }
-                    return Err(ClientError::NetIo(e));
-                },
-            }
-        }
-
-        // TODO: cache/debounce this? not sure how expensive it is ...
-        if self.tx_buf.remaining() > 0 {
-            self.conn_p.registry()
-                .reregister(&mut self.conn_s, self.token, Interest::READABLE | Interest::WRITABLE)
-                .map_err(ClientError::NetIo)?;
-        } else {
-            self.conn_p.registry()
-                .reregister(&mut self.conn_s, self.token, Interest::READABLE)
-                .map_err(ClientError::NetIo)?;
-        }
-
-        Ok(bytes_written)
+        Ok(())
     }
 }
 
@@ -176,7 +148,8 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
     let client_t = client.token; // NOTE: you may be tempted, but you need this ...
 
     // run the event loop to settle the initial Noise handshake ...
-    let mut crypto = hs::perform_handshake(&mut client, client_t)?;
+    let crypto = hs::perform_handshake(&mut client, client_t)?;
+    let mut engine = PacketEngine::new(crypto);
 
     // then do the real business ...
     info!("starting client event loop ...");
@@ -198,8 +171,9 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
         if client.tx_buf.is_empty() {
             match client.comms.rep_rx.try_recv() {
                 Ok(msg) => {
-                    client.tx_buf.put(wire::write_packet(&mut crypto, msg)?);
-                    client.drain_write()?;
+                    engine.write_packet(msg)?;
+                    engine.drain_write(&mut client.conn_s)?;
+                    client.register_writable(engine.tx_buf_empty())?;
                 },
 
                 Err(TryRecvError::Empty) => {/* this is fine */},
@@ -208,7 +182,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
         }
 
         'push: loop {
-            let next_packet = client.engine.drain_queue().pop_front();
+            let next_packet = engine.drain_queue().pop_front();
             if next_packet.is_none() { break 'push }
 
             if let Some(p) = next_packet
@@ -232,8 +206,8 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
             }
 
             if event.is_readable() { 
-                client.engine.drain_read(&mut client.conn_s)?; 
-                match client.engine.try_parse(&mut crypto) {
+                engine.drain_read(&mut client.conn_s)?; 
+                match engine.try_parse() {
                     Ok(_) => { /* fine */ },
 
                     Err((PacketError::Crypto(e),_)) => { return Err(e.into()) },
@@ -241,7 +215,10 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
                 }
             }
 
-            if event.is_writable() { client.drain_write()?; }
+            if event.is_writable() { 
+                engine.drain_write(&mut client.conn_s)?;
+                client.register_writable(engine.tx_buf_empty())?;
+            }
         }
     }
 }

@@ -2,12 +2,12 @@ use crate::CorrelationId;
 use crate::daemon::msg::Packet;
 
 use blinkedblist::List;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json;
 use snow::TransportState;
 use thiserror::Error;
-use tracing::{info};
+use tracing::info;
 
 use std::io;
 
@@ -29,7 +29,9 @@ type PacketResult<T> = Result<T, PacketError>;
 
 pub struct PacketEngine<T> {
     rx_buf: BytesMut,
+    tx_buf: BytesMut,
     pkt_list: List<Packet<T>>,
+    transport: TransportState,
 }
 
 impl<T> PacketEngine<T> where T: DeserializeOwned {
@@ -46,10 +48,12 @@ impl<T> PacketEngine<T> where T: DeserializeOwned {
     /// was created. Successfully decoded packets will be placed on a queue, and
     /// the number of such packets placed on the queue will be returned to the caller.
     ///
-    pub fn new() -> PacketEngine<T> {
+    pub fn new(transport: TransportState) -> PacketEngine<T> {
         Self {
             rx_buf: BytesMut::with_capacity(64 * 1024),
+            tx_buf: BytesMut::with_capacity(64 * 1024), // TODO: what size?
             pkt_list: List::new(), // TODO: blinkedblist ;; with_capacity
+            transport,
         }
     }
 
@@ -84,6 +88,43 @@ impl<T> PacketEngine<T> where T: DeserializeOwned {
         Ok(bytes_read)
     }
 
+    /// Returns `true` if the internal write buffer has been flushed completely
+    pub fn tx_buf_empty(&self) -> bool { self.tx_buf.is_empty() }
+
+    /// Consumes bytes from the internal buffer and submits them to the writer
+    /// until the writer produces a 0-sized write, we exhaust our buffer, or
+    /// the writer returns `WouldBlock`. The number of bytes written up to
+    /// this point is returned.
+    ///
+    pub fn drain_write<W>(&mut self, mut writer: W) -> PacketResult<usize> 
+    where W: io::Write {
+        if self.tx_buf.is_empty() { return Ok(0) }
+
+        let mut bytes_written = 0;
+
+        'drain: loop {
+            match writer.write(&self.tx_buf) {
+                Ok(0) => { break 'drain },
+
+                Ok(sz) => {
+                    bytes_written += sz;
+                    self.tx_buf.advance(sz);
+                    continue 'drain
+                },
+
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::Interrupted { continue 'drain }
+                    if e.kind() == io::ErrorKind::WouldBlock  { break 'drain }
+                    return Err(e.into())
+                },
+            }
+        }
+
+        if self.tx_buf.is_empty() { self.tx_buf.truncate(0) }
+
+        Ok(bytes_written)
+    }
+
     /// Checks if the `rx_buf` contains a full packet header along with all the
     /// described payload bytes. If so that packet is consumed from the buffer
     /// and stored in an internal `pkt_list` for later retrieval.
@@ -103,7 +144,7 @@ impl<T> PacketEngine<T> where T: DeserializeOwned {
     /// returned, and you must continue to call `try_parse` until 0 packets are
     /// processed to fully drain the queue ...
     ///
-    pub fn try_parse(&mut self, crypto: &mut TransportState) -> Result<usize, (PacketError, usize)> {
+    pub fn try_parse(&mut self) -> Result<usize, (PacketError, usize)> {
         let mut num_processed = 0;
 
         loop {
@@ -133,7 +174,7 @@ impl<T> PacketEngine<T> where T: DeserializeOwned {
 
             // decrypt it w/ noise
             let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
-            let sz = crypto.read_message(&packet_bytes, &mut packet_buf)
+            let sz = self.transport.read_message(&packet_bytes, &mut packet_buf)
                 .map_err(|e| (PacketError::Crypto(e), num_processed))?;
 
             // TODO: check nonce/ttl
@@ -154,6 +195,35 @@ impl<T> PacketEngine<T> where T: DeserializeOwned {
     // TODO: would like to return a drain iterator from the front ...
     pub fn drain_queue(&mut self) -> &mut List<Packet<T>> { &mut self.pkt_list }
 
+    /// Encrypts & formats a reply packet for the wire, returning a byte-array which
+    /// can be used to send the packet onto the wire ...
+    ///
+    pub fn write_packet<O>(&mut self, packet: Packet<O>) -> PacketResult<usize>
+    where O: Serialize {
+
+        let json_buf = serde_json::to_string(&packet.msg)?;
+
+        if json_buf.len() > (u16::MAX as usize - LEN_HEADER) {
+            todo!("need to set continuation flag")
+        }
+
+        // write header
+        self.tx_buf.put_u128(packet.nonce.0);
+        self.tx_buf.put_u64(packet.ttl);
+        self.tx_buf.put_u32(0 /* flags */); // TODO: packet continuation
+        self.tx_buf.put_u16(0 /* rsvd */);
+
+        // write encrypted message
+        let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
+        let sz = self.transport.write_message(json_buf.as_bytes(), &mut packet_buf)?;
+
+        assert!(sz < (u16::MAX as usize - LEN_HEADER));
+        self.tx_buf.put_u16(sz as u16);
+        self.tx_buf.put(&packet_buf[..sz]);
+
+        Ok(LEN_HEADER + sz)
+    }
+
     #[allow(dead_code)]
     fn debug_packet<B: Buf>(mut buf: B) {
         if buf.remaining() < LEN_HEADER { return; }
@@ -167,45 +237,15 @@ impl<T> PacketEngine<T> where T: DeserializeOwned {
     }
 }
 
-/// Encrypts & formats a reply packet for the wire, returning a byte-array which
-/// can be used to send the packet onto the wire ...
-///
-pub fn write_packet<T>(crypto: &mut TransportState, packet: Packet<T>) -> PacketResult<Bytes>
-where T: Serialize {
-
-    let json_buf = serde_json::to_string(&packet.msg)?;
-
-    if json_buf.len() > (u16::MAX as usize - LEN_HEADER) {
-        todo!("need to set continuation flag")
-    }
-
-    let mut buf = BytesMut::with_capacity(LEN_HEADER + json_buf.len());
-
-    // write header
-    buf.put_u128(packet.nonce.0);
-    buf.put_u64(packet.ttl);
-    buf.put_u32(0 /* flags */); // TODO: packet continuation
-    buf.put_u16(0 /* rsvd */);
-
-    // write encrypted message
-    let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
-    let sz = crypto.write_message(json_buf.as_bytes(), &mut packet_buf)?;
-
-    assert!(sz < (u16::MAX as usize - LEN_HEADER));
-    buf.put_u16(sz as u16);
-    buf.put(&packet_buf[..sz]);
-
-    Ok(buf.freeze())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::daemon::msg::{CorrelationId, EventReq, Packet};
     use crate::daemon::tcp::wire::LEN_HEADER;
     use crate::daemon::tcp::{NOISE_INIT};
-    use super::{write_packet, PacketEngine};
+    use super::PacketEngine;
 
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
+    use serde::Serialize;
     use snow::{HandshakeState, TransportState};
     use snow::params::NoiseParams;
     
@@ -281,18 +321,34 @@ mod tests {
         }
     }
 
+    fn write_ts<T>(ts: &mut TransportState, p: Packet<T>) -> Bytes
+    where T: Serialize {
+        // this helper just avoids us setting up another packet engine to
+        // model the other side ...
+     
+        let message = serde_json::to_string(&p).expect("could not encode");
+        let mut output_buffer = BytesMut::zeroed(64 * 1024);
+        let sz = ts.write_message(&message.as_bytes(), &mut output_buffer)
+            .expect("could not write message to output buffer");
+
+        output_buffer.truncate(sz); output_buffer.freeze()
+    }
+
     #[test]
     fn test_roundtrip_one_packet() {
-        let (mut tx, mut rx) = get_transport_peers();
+        let (tx, rx) = get_transport_peers();
 
-        let some_packet = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut writer = PacketEngine::<EventReq>::new(tx);
+        writer.write_packet(fake_packet()).expect("could not write packet");
 
-        let mut engine: PacketEngine<EventReq> = PacketEngine::new();
-        let sz = engine.drain_read(&some_packet[..]).expect("could not read");
-        assert_eq!(sz, some_packet.len());
+        let mut some_packet = BytesMut::zeroed(64 * 1024);
+        let wsz = writer.drain_write(&mut some_packet[..]).expect("failed to drain packet");
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let mut engine = PacketEngine::<EventReq>::new(rx);
+        let sz = engine.drain_read(&some_packet[..wsz]).expect("could not read");
+        assert_eq!(sz, wsz);
+
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(1, p);
 
         let p = engine.drain_queue().pop_front().expect("no packet");
@@ -305,22 +361,26 @@ mod tests {
 
     #[test]
     fn test_partial_full_header() {
-        let (mut tx, mut rx) = get_transport_peers();
+        let (tx, rx) = get_transport_peers();
 
-        let some_packet = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut writer = PacketEngine::<EventReq>::new(tx);
+        let sz = writer.write_packet(fake_packet()).expect("could not write packet");
 
-        let mut engine: PacketEngine<EventReq> = PacketEngine::new();
+        let mut some_packet = BytesMut::zeroed(64 * 1024);
+        let wsz = writer.drain_write(&mut some_packet[..]).expect("failed to drain packet");
+        assert_eq!(wsz, sz);
+
+        let mut engine: PacketEngine<EventReq> = PacketEngine::new(rx);
         let sz = engine.drain_read(&some_packet[..LEN_HEADER]).expect("could not read");
         assert_eq!(sz, LEN_HEADER);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(0, p);
 
-        let sz = engine.drain_read(&some_packet[LEN_HEADER..]).expect("could not read");
-        assert_eq!(sz, some_packet.len() - LEN_HEADER);
+        let sz = engine.drain_read(&some_packet[LEN_HEADER..wsz]).expect("could not read");
+        assert_eq!(sz, wsz - LEN_HEADER);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(1, p);
 
         let p = engine.drain_queue().pop_front().expect("no packet");
@@ -333,22 +393,25 @@ mod tests {
 
     #[test]
     fn test_partial_partial_header() {
-        let (mut tx, mut rx) = get_transport_peers();
+        let (tx, rx) = get_transport_peers();
 
-        let some_packet = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut writer = PacketEngine::<EventReq>::new(tx);
+        writer.write_packet(fake_packet()).expect("could not write packet");
 
-        let mut engine: PacketEngine<EventReq> = PacketEngine::new();
+        let mut some_packet = BytesMut::zeroed(64 * 1024);
+        let wsz = writer.drain_write(&mut some_packet[..]).expect("failed to drain packet");
+
+        let mut engine: PacketEngine<EventReq> = PacketEngine::new(rx);
         let sz = engine.drain_read(&some_packet[..30]).expect("could not read");
         assert_eq!(sz, 30);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(0, p);
 
-        let sz = engine.drain_read(&some_packet[30..]).expect("could not read");
-        assert_eq!(sz, some_packet.len() - 30);
+        let sz = engine.drain_read(&some_packet[30..wsz]).expect("could not read");
+        assert_eq!(sz, wsz - 30);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(1, p);
 
         let p = engine.drain_queue().pop_front().expect("no packet");
@@ -361,29 +424,31 @@ mod tests {
 
     #[test]
     fn test_full_then_partial_trailer() {
-        let (mut tx, mut rx) = get_transport_peers();
+        let (tx, rx) = get_transport_peers();
 
-        let packet_a = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut writer = PacketEngine::<EventReq>::new(tx);
+        let sz_wa = writer.write_packet(fake_packet()).expect("cannot write");
+        let sz_wb = writer.write_packet(fake_packet()).expect("");
 
-        let packet_b = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut wire_packets = BytesMut::zeroed(64 * 1024);
+        let wsz = writer.drain_write(&mut wire_packets[..]).expect("failed to drain packet");
+        assert_eq!(sz_wa + sz_wb, wsz);
 
-        let mut engine: PacketEngine<EventReq> = PacketEngine::new();
-        let sz = engine.drain_read(&packet_a[..]).expect("could not read");
-        assert_eq!(sz, packet_a.len());
+        let mut engine: PacketEngine<EventReq> = PacketEngine::new(rx);
+        let sz = engine.drain_read(&wire_packets[..sz_wa]).expect("could not read");
+        assert_eq!(sz, sz_wa);
 
         let partial_sz = LEN_HEADER + 1;
-        let sz = engine.drain_read(&packet_b[..partial_sz]).expect("could not read");
+        let sz = engine.drain_read(&wire_packets[sz..(sz+partial_sz)]).expect("could not read");
         assert_eq!(sz, partial_sz);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(1, p);
 
-        let sz = engine.drain_read(&packet_b[partial_sz..]).expect("could not read");
-        assert_eq!(sz, packet_b.len() - partial_sz);
+        let sz = engine.drain_read(&wire_packets[(sz_wa+partial_sz)..wsz]).expect("could not read");
+        assert_eq!(sz, sz_wb - partial_sz);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(1, p);
 
         assert!(engine.drain_queue().pop_front().is_some());
@@ -393,22 +458,24 @@ mod tests {
 
     #[test]
     fn test_full_then_full() {
-        let (mut tx, mut rx) = get_transport_peers();
+        let (tx, rx) = get_transport_peers();
 
-        let packet_a = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut writer = PacketEngine::<EventReq>::new(tx);
+        let sz_wa = writer.write_packet(fake_packet()).expect("cannot write");
+        let sz_wb = writer.write_packet(fake_packet()).expect("");
 
-        let packet_b = write_packet(&mut tx, fake_packet())
-            .expect("did not get a fake packet");
+        let mut wire_packets = BytesMut::zeroed(64 * 1024);
+        let wsz = writer.drain_write(&mut wire_packets[..]).expect("failed to drain packet");
+        assert_eq!(sz_wa + sz_wb, wsz);
 
-        let mut engine: PacketEngine<EventReq> = PacketEngine::new();
-        let sz = engine.drain_read(&packet_a[..]).expect("could not read");
-        assert_eq!(sz, packet_a.len());
+        let mut engine: PacketEngine<EventReq> = PacketEngine::new(rx);
+        let sz = engine.drain_read(&wire_packets[..sz_wa]).expect("could not read");
+        assert_eq!(sz, sz_wa);
 
-        let sz = engine.drain_read(&packet_b[..]).expect("could not read");
-        assert_eq!(sz, packet_b.len());
+        let sz = engine.drain_read(&wire_packets[sz_wa..wsz]).expect("could not read");
+        assert_eq!(sz, sz_wb);
 
-        let p = engine.try_parse(&mut rx).expect("could not parse");
+        let p = engine.try_parse().expect("could not parse");
         assert_eq!(2, p);
 
         assert!(engine.drain_queue().pop_front().is_some());
