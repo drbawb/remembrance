@@ -85,15 +85,15 @@ impl Client {
     pub fn new(comms: ClientInit) -> Result<Self, ClientError> {
         println!("connecting to controller ...");
         let cfg = config::read_cached_file()?;
-        let conn_p = Poll::new().map_err(|e| ClientError::NetIo(e))?;
+        let conn_p = Poll::new().map_err(ClientError::NetIo)?;
 
-        let addr = cfg.controller.urn.parse::<SocketAddr>().map_err(|e| { 
+        let addr = cfg.controller.urn.parse::<SocketAddr>().map_err(|e| {
             let msg = format!("could not parse urn from config: {e:?}");
             ClientError::BadConfig(msg)
         })?;
 
         println!("opening socket to {addr:?} ...");
-        let conn_s = TcpStream::connect(addr).map_err(|e| ClientError::NetIo(e))?;
+        let conn_s = TcpStream::connect(addr).map_err(ClientError::NetIo)?;
         let rx_buf = BytesMut::with_capacity(128 * 1024);
         let tx_buf = BytesMut::with_capacity(128 * 1024);
 
@@ -137,13 +137,13 @@ impl Client {
         let mut bytes_written = 0;
 
         'drain: loop {
-            match self.conn_s.write(&mut self.tx_buf) {
+            match self.conn_s.write(&self.tx_buf) {
                 Ok(0) => { break 'drain },
 
                 Ok(sz) => {
-                    bytes_written += sz; 
+                    bytes_written += sz;
                     self.tx_buf.advance(sz);
-                    continue 'drain 
+                    continue 'drain
                 },
 
                 Err(e) => {
@@ -158,11 +158,11 @@ impl Client {
         if self.tx_buf.remaining() > 0 {
             self.conn_p.registry()
                 .reregister(&mut self.conn_s, self.token, Interest::READABLE | Interest::WRITABLE)
-                .map_err(|e| ClientError::NetIo(e))?;
+                .map_err(ClientError::NetIo)?;
         } else {
             self.conn_p.registry()
                 .reregister(&mut self.conn_s, self.token, Interest::READABLE)
-                .map_err(|e| ClientError::NetIo(e))?;
+                .map_err(ClientError::NetIo)?;
         }
 
         Ok(bytes_written)
@@ -186,8 +186,8 @@ impl Client {
     /// the peer will be able to reassmble this packet.)
     ///
     fn write_packet(
-        &mut self, 
-        crypto: &mut TransportState, 
+        &mut self,
+        crypto: &mut TransportState,
         packet: Packet<EventRep>) -> Result<usize, ClientError> {
 
         let json_buf = serde_json::to_string(&packet.msg)?;
@@ -246,19 +246,19 @@ impl Client {
         // Self::debug_packet(self.rx_buf.clone());
         self.rx_buf.advance(32); // skip the header
         let packet_bytes = self.rx_buf.split_to(len);
-        
+
         // decrypt it w/ noise
         let mut packet_buf = BytesMut::zeroed(64 * 1024); // TODO: what size?
         let sz = crypto.read_message(&packet_bytes, &mut packet_buf)
-            .map_err(|e| ClientError::BadCrypto(e))?;
+            .map_err(ClientError::BadCrypto)?;
 
         // TODO: check nonce/ttl
         let event_req = serde_json::from_reader(&packet_buf[..sz])?;
 
         Ok(Some(Packet {
-            nonce: CorrelationId(nonce), 
-            ttl: ttl,
-            len: Some(sz), 
+            nonce: CorrelationId(nonce),
+            ttl,
+            len: Some(sz),
             msg: event_req,
         }))
     }
@@ -282,8 +282,8 @@ fn err_eof<T>(msg: String) -> Result<T, ClientError> {
 /// and begins processing messages as specified in `PROTO.md` of the `remembrance`
 /// repository.
 ///
-/// Interacting with this event loop is done by sending/receiving messages on 
-/// the channels which were passed in the original `ClientInit` block when 
+/// Interacting with this event loop is done by sending/receiving messages on
+/// the channels which were passed in the original `ClientInit` block when
 /// the client was created.
 ///
 #[allow(unused_labels)]
@@ -297,18 +297,18 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
 
     // then do the real business ...
     println!("starting client event loop ...");
-    assert_eq!(true, client.tx_buf.is_empty());
-    assert_eq!(true, client.rx_buf.is_empty());
+    assert!(client.tx_buf.is_empty());
+    assert!(client.rx_buf.is_empty());
 
-    client.conn_s.set_nodelay(true).map_err(|e| ClientError::NetIo(e))?;
+    client.conn_s.set_nodelay(true).map_err(ClientError::NetIo)?;
 
     client.conn_p.registry()
         .reregister(&mut client.conn_s, client_t, Interest::READABLE)
-        .map_err(|e| ClientError::NetIo(e))?;
+        .map_err(ClientError::NetIo)?;
 
     // schedule the daemon to wake us up
     let waker = Waker::new(client.conn_p.registry(), Token(1))
-        .map_err(|e| ClientError::NetIo(e))?;
+        .map_err(ClientError::NetIo)?;
 
     client.comms.waker.reset(waker);
 
@@ -325,15 +325,13 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
             };
         }
 
-        if !client.rx_buf.is_empty() {
-            if let Some(packet) = client.try_recv_packet(&mut crypto)? {
-                if let Err(err) = client.comms.req_tx.send(packet) {
-                    return err_eof(format!("request channel closed unexpectedly: {err:?}"));
-                }
-            }
+        if !client.rx_buf.is_empty()
+        && let Some(packet) = client.try_recv_packet(&mut crypto)?
+        && let Err(err) = client.comms.req_tx.send(packet) {
+            return err_eof(format!("request channel closed unexpectedly: {err:?}"));
         }
 
-        client.conn_p.poll(&mut events, None).map_err(|e| ClientError::NetIo(e))?;
+        client.conn_p.poll(&mut events, None).map_err(ClientError::NetIo)?;
 
         for event in events.iter() {
             match event.token() {
@@ -343,7 +341,7 @@ pub fn client_event_loop(mut client: Client) -> Result<(), ClientError> {
             }
 
             if event.is_read_closed() || event.is_write_closed() {
-                return err_eof(format!("socket was closed without clean disconnect notice D:"));
+                return err_eof("socket was closed without clean disconnect notice D:".into());
             }
 
             if event.is_readable() { client.drain_read()?; }

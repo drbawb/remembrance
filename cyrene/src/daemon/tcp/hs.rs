@@ -92,8 +92,8 @@ impl HandshakeEngine {
             State::NeedPacketLen | State::NeedPacketBody { .. } => { /* fine */ },
 
             // only safe to call consume when we are in a read-context
-            State::GenerateRequest | State::DrainResponse { .. } => {
-                return Err(ClientError::HandshakeFail(format!("cannot consume anymore, please drain D:")))
+            State::GenerateRequest | State::DrainResponse => {
+                return Err(ClientError::HandshakeFail("cannot consume anymore, please drain D:".into()))
             }
         }
 
@@ -110,17 +110,17 @@ impl HandshakeEngine {
 
                 let len = self.rx_buf.get_u16() as usize;
                 self.state = State::NeedPacketBody { len };
-                return Ok(true)
+                Ok(true) // know length of request body
             },
 
             State::NeedPacketBody { len } => {
                 if self.rx_buf.len() < len { return Ok(false) }
                 self.state = State::GenerateRequest;
-                return Ok(true)
+                Ok(true) // have full request body
             },
 
-            State::GenerateRequest => { return self.do_response() },
-            State::DrainResponse => { unreachable!("h/s advanced past finalization") }
+            State::GenerateRequest => self.do_response(),
+            State::DrainResponse => unreachable!("h/s advanced past finalization"),
         }
     }
 
@@ -129,7 +129,7 @@ impl HandshakeEngine {
     ///
     pub fn into_inner(self) -> Result<(Bytes, HandshakeState), ClientError> {
         if self.state != State::DrainResponse {
-            return Err(ClientError::HandshakeFail(format!("handshake engine finalization called prematurely")))
+            return Err(ClientError::HandshakeFail("handshake engine finalization called prematurely".into()))
         }
 
         Ok((self.tx_buf.freeze(), self.responder))
@@ -186,10 +186,10 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
 
     client.conn_p.registry()
         .register(&mut client.conn_s, client_t, Interest::READABLE)
-        .map_err(|e| ClientError::NetIo(e))?;
+        .map_err(ClientError::NetIo)?;
 
     'hs: loop {
-        client.conn_p.poll(&mut events, None).map_err(|e| ClientError::NetIo(e))?;
+        client.conn_p.poll(&mut events, None).map_err(ClientError::NetIo)?;
 
         for event in events.iter() {
             if event.is_read_closed() || event.is_write_closed() {
@@ -216,12 +216,12 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
                 },
 
 
-                State::GenerateRequest { .. } => {
+                State::GenerateRequest => {
                     if !hs_engine.try_advance()? { continue 'hs }
                     continue 'state
                 },
 
-                State::DrainResponse { .. } => { break 'hs },
+                State::DrainResponse => { break 'hs },
             }
         }
     }
@@ -231,10 +231,10 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
 
     client.conn_p.registry()
         .reregister(&mut client.conn_s, client_t, Interest::READABLE | Interest::WRITABLE)
-        .map_err(|e| ClientError::NetIo(e))?;
+        .map_err(ClientError::NetIo)?;
 
     'hs: loop {
-        client.conn_p.poll(&mut events, None).map_err(|e| ClientError::NetIo(e))?;
+        client.conn_p.poll(&mut events, None).map_err(ClientError::NetIo)?;
 
         for event in events.iter() {
             if event.is_read_closed() || event.is_write_closed() {
@@ -274,9 +274,9 @@ fn drain_hs_open(hs: &mut HandshakeEngine, conn: &mut TcpStream) -> Result<(), C
 
 fn drain_hs_close(packet: &mut Bytes, conn: &mut TcpStream) -> Result<bool, ClientError> {
     'write: loop {
-        if packet.len() <= 0 { break 'write }
+        if packet.is_empty() { break 'write }
 
-        match conn.write(&packet) {
+        match conn.write(packet) {
             Ok(0) => {
                 return Err(ClientError::UnexpectedEof("could not write handshake to socket ...".into()))
             },
@@ -291,7 +291,7 @@ fn drain_hs_close(packet: &mut Bytes, conn: &mut TcpStream) -> Result<bool, Clie
         }
     }
     
-    Ok(packet.len() <= 0)
+    Ok(packet.is_empty())
 }
 
 #[cfg(test)]

@@ -71,7 +71,7 @@ impl Snooze {
     pub fn poke(&self) {
         let Ok(mut slot) = self.0.lock() else { return };
         let Some(w) = slot.as_ref() else { return };
-        if let Err(_) = w.wake() { slot.take(); }
+        if w.wake().is_err() { slot.take(); }
     }
 
     pub fn reset(&self, w: Waker) { 
@@ -117,7 +117,7 @@ pub fn run_command_queue() -> Result<String> {
         if thread_ws.is_finished() {
             let tcp_result = thread_ws.join()
                 .inspect_err(|err| { eprintln!("w/s thread panic: {err:?}") })
-                .ok().expect("w/s thread panicked");
+                .expect("w/s thread panicked");
 
             match tcp_result {
                 Ok(_) => { /* fine */},
@@ -204,7 +204,7 @@ impl DaemonInit {
         Self {
             kernel: fresh_instance,
             waker: waker.clone(),
-            tx_req_q: tx_req_q,
+            tx_req_q: tx_req_q.clone(),
             tx_rep_q: tx_rep_q.clone(),
             rx_sub_q: rx_rep_q,
         }
@@ -309,7 +309,7 @@ impl DaemonKernel {
                         return Ok(())
                     }
 
-                    if let None = subproc.stdout {
+                    if subproc.stdout.is_none() {
                         eprintln!("no output from zfs?");
                         return Ok(())
                     }

@@ -79,7 +79,7 @@ fn entry_genkey() -> Result<ExitCode> {
     use snow::params::DHChoice;
     use snow::resolvers::{self, CryptoResolver};
 
-    let resolver = resolvers::DefaultResolver::default();
+    let resolver = resolvers::DefaultResolver;
     let mut rng = resolver.resolve_rng().expect("crypto RNG unavailable");
     let mut dh = resolver.resolve_dh(&DHChoice::Curve25519).expect("crytpo curve unavailable");
     dh.generate(&mut *rng).expect("failed to generate key");
@@ -104,9 +104,9 @@ fn entry_pubkey() -> Result<ExitCode> {
         .expect("failed to decode key from stdin");
 
     let sk_bytes: &[u8; 32] = stdin_bytes.as_slice().try_into()
-        .expect(&format!("expected [32] bytes, got [{}]", stdin_bytes.len()));
+        .unwrap_or_else(|_| panic!("expected [32] bytes, got [{}]", stdin_bytes.len()));
 
-    let resolver = resolvers::DefaultResolver::default();
+    let resolver = resolvers::DefaultResolver;
     let mut dh = resolver.resolve_dh(&DHChoice::Curve25519).expect("crytpo curve unavailable");
     dh.set(sk_bytes);
 
