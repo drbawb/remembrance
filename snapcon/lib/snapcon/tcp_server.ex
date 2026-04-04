@@ -70,7 +70,7 @@ defmodule Snapcon.TcpServer do
 
   end
 
-  @noise_protocol "Noise_KK_25519_ChaChaPoly_BLAKE2s"
+  @noise_protocol "Noise_IK_25519_ChaChaPoly_BLAKE2s"
   @version %{"version" => 0x1001}
 
 
@@ -81,23 +81,26 @@ defmodule Snapcon.TcpServer do
     Logger.info "new TCP connection :: #{inspect(state)}"
 
     init = %HandlerState{socket: socket}
-
-    state = init
       |> assign(:status, :pending)
       |> assign(:pending, %{})
       |> do_noise_handshake()
-      |> send_ident_packet()
 
-    Logger.info "noise handshake success :: #{inspect(state)}"
+    case verify_peer_key(init) do
+      {:error, :unknown_peer} ->
+        {:close, init}
 
-    {:continue, state}
+      {:ok, state} ->
+        state = send_ident_packet(state)
+        Logger.info "noise handshake success :: #{inspect(state)}"
+        {:continue, state}
+    end
   end
 
   @impl ThousandIsland.Handler
   def handle_close(_socket, state) do
     Logger.info "closing TCP connection :: #{inspect(state)}"
 
-    if Map.has_key?(state.assigns, :name) do
+    if state.assigns[:status] == :ready do
       :ok = DaemonServ.remove_host(state.assigns[:name])
     end
   end
@@ -106,7 +109,7 @@ defmodule Snapcon.TcpServer do
   def handle_timeout(_socket, state) do
     Logger.error "socket timed out :: #{inspect(state)}"
 
-    if Map.has_key?(state.assigns, :name) do
+    if state.assigns[:status] == :ready do
       :ok = DaemonServ.remove_host(state.assigns[:name])
     end
   end
@@ -199,13 +202,17 @@ defmodule Snapcon.TcpServer do
 
     state = case status do
       :pending ->
-        %{"Ident" => %{"name" => name, "version" => version}} = packet
+        %{"Ident" => %{"name" => wire_name, "version" => version}} = packet
+        db_name = state.assigns[:name]
 
-        :ok = DaemonServ.add_host(name, self())
+        if wire_name != db_name do
+          raise "ident name mismatch: expected #{db_name}, got #{wire_name}"
+        end
+
+        :ok = DaemonServ.add_host(db_name, self())
 
         state
         |> assign(:status, :ready)
-        |> assign(:name, name)
         |> assign(:version, version)
 
       :ready ->
@@ -284,40 +291,52 @@ defmodule Snapcon.TcpServer do
 
   defp read_header(_state, _buf), do: raise "header not in expected format"
 
+  defp verify_peer_key(state) do
+    rs = Decibel.get_remote_key(state.noise)
+    rs_b64 = Base.encode64(rs)
+
+    case Snapcon.Repo.get_by(Snapcon.Host, pubkey: rs_b64) do
+      nil ->
+        Logger.warning "rejected unknown peer key: #{rs_b64}"
+        {:error, :unknown_peer}
+
+      host ->
+        {:ok, assign(state, :name, host.name)}
+    end
+  end
+
   defp do_noise_handshake(state) do
     tcp_cfg = Application.fetch_env!(:zfs_snapcon, Snapcon.TcpServer)
     kp = {Base.decode64!(tcp_cfg[:k_pub]), Base.decode64!(tcp_cfg[:k_priv])}
-    kc = Base.decode64!(tcp_cfg[:c_pub])
     socket = state.socket
 
-    # send handshake
-    ini = Decibel.new(@noise_protocol, :ini, %{s: kp, rs: kc})
-    msg1 = Decibel.handshake_encrypt(ini)
-    msg1_len = byte_size(:erlang.iolist_to_binary(msg1))
+    # receive msg1 from cyrene (initiator)
+    {:ok, <<msg1_len::unsigned-16, rest::binary>>} = TCP.recv(socket, 2, 30_000)
 
-    :ok = TCP.send(socket, <<msg1_len::unsigned-16>>)
-    :ok = TCP.send(socket, msg1)
-
-    # receive handshake response ;; raises on failure
-    {:ok, <<msg2_len::unsigned-16, rest::binary>>} = TCP.recv(socket, 2, 30_000)
-
-    {msg2, rest} = cond do
-      byte_size(rest) >= msg2_len ->
-        <<hs_msg::binary-size(msg2_len), tail::binary>> = rest
+    {msg1, rest} = cond do
+      byte_size(rest) >= msg1_len ->
+        <<hs_msg::binary-size(msg1_len), tail::binary>> = rest
         {hs_msg, tail}
 
       true ->
-        rem = msg2_len - byte_size(rest)
-        {:ok, <<hs_msg::binary-size(rem), tail::binary>>} = TCP.recv(socket, msg2_len, 30_000)
-        {rest <> hs_msg, tail}
+        rem = msg1_len - byte_size(rest)
+        {:ok, more} = TCP.recv(socket, rem, 30_000)
+        {rest <> more, <<>>}
     end
 
     if byte_size(rest) > 0 do
       Logger.warning "unexpected trailing data during handshake :: #{inspect(rest)}"
     end
 
-    Decibel.handshake_decrypt(ini, msg2)
+    resp = Decibel.new(@noise_protocol, :rsp, %{s: kp})
+    Decibel.handshake_decrypt(resp, msg1)
 
-    %{state | noise: ini}
+    # send msg2 to cyrene
+    msg2 = Decibel.handshake_encrypt(resp)
+    msg2_len = byte_size(:erlang.iolist_to_binary(msg2))
+    :ok = TCP.send(socket, <<msg2_len::unsigned-16>>)
+    :ok = TCP.send(socket, msg2)
+
+    %{state | noise: resp}
   end
 end
