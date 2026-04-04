@@ -285,8 +285,9 @@ defmodule Snapcon.TcpServer do
   defp read_header(_state, _buf), do: raise "header not in expected format"
 
   defp do_noise_handshake(state) do
-    kp = {Base.decode64!(@k_pub), Base.decode64!(@k_priv)}
-    kc = Base.decode64!(@c_pub)
+    tcp_cfg = Application.fetch_env!(:zfs_snapcon, Snapcon.TcpServer)
+    kp = {Base.decode64!(tcp_cfg[:k_pub]), Base.decode64!(tcp_cfg[:k_priv])}
+    kc = Base.decode64!(tcp_cfg[:c_pub])
     socket = state.socket
 
     # send handshake

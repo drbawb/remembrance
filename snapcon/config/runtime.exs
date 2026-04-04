@@ -49,6 +49,11 @@ if config_env() == :prod do
 
   config :zfs_snapcon, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  config :zfs_snapcon, Snapcon.TcpServer,
+    k_pub:  System.get_env("SNAPCON_K_PUB")  || raise("environment variable SNAPCON_K_PUB is missing"),
+    k_priv: System.get_env("SNAPCON_K_PRIV") || raise("environment variable SNAPCON_K_PRIV is missing"),
+    c_pub:  System.get_env("SNAPCON_C_PUB")  || raise("environment variable SNAPCON_C_PUB is missing")
+
   config :zfs_snapcon, SnapconWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
