@@ -10,20 +10,6 @@ pub struct Packet<T> {
     pub msg: T,
 }
 
-impl Packet<()> {
-    // TODO: wow I hate this, T=() lmao ...
-    // This is here so that this freestanding function can be called
-    // even if you don't have an instantiation of a packet ...
-    pub fn calc_ttl(seconds: u64) -> u64 {
-        let wall_t = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time moving backwards? that's bad ...")
-            .as_secs();
-
-        wall_t + seconds
-    }
-}
-
 impl<T> Packet<T> {
     pub fn from_parts(nonce: u128, ttl: u64, msg: T) -> Self {
         let nonce = CorrelationId(nonce);
@@ -64,7 +50,6 @@ pub enum ZfsListType {
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
 pub struct CorrelationId(pub u128);
 
-
 pub fn build_packet(msg: EventRep) -> Packet<EventRep> {
     let nonce = CorrelationId(rand::random());
 
@@ -76,4 +61,13 @@ pub fn build_packet(msg: EventRep) -> Packet<EventRep> {
     let ttl = wall_t + 30;
 
     Packet { nonce, msg, ttl, len: None }
+}
+
+pub fn calc_ttl(seconds: u64) -> u64 {
+    let wall_t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time moving backwards? that's bad ...")
+        .as_secs();
+
+    wall_t + seconds
 }

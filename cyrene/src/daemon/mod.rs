@@ -327,7 +327,7 @@ impl DaemonKernel {
 
                     info!("({buf_n}b) response from ZFS");
                     info!("acknowledging {nonce:?}");
-                    let new_ttl = Packet::calc_ttl(30);
+                    let new_ttl = msg::calc_ttl(30);
 
                     let list = buf.lines()
                                   .map(|line| line.to_owned())
