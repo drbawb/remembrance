@@ -127,7 +127,10 @@ pub fn run_command_queue() -> Result<String> {
                     error!("w/s disconnect: {msg:?}");
                 },
 
-                _ => { todo!("unhandled w/s error") }
+                Err(err) => { 
+                    error!(?err, "tcp socket shutdown prematurely");
+                    todo!("unhandled w/s error")
+                }
             }
 
             // apply backoff

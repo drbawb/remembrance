@@ -3,7 +3,7 @@ use data_encoding::BASE64;
 use mio::{Events, Interest, Token};
 use mio::net::TcpStream;
 use snow::{HandshakeState, TransportState};
-use tracing::{info, error};
+use tracing::{debug, info};
 
 use std::io::{self,Read, Write};
 
@@ -39,7 +39,7 @@ use super::{Client, ClientError, NOISE_INIT};
 #[derive(Debug)]
 pub struct HandshakeEngine {
     state: State,
-    responder: HandshakeState,
+    initiator: HandshakeState,
 
     rx_buf: BytesMut,
     tx_buf: BytesMut,
@@ -70,9 +70,9 @@ pub enum State {
 
 impl HandshakeEngine {
     /// Initialize a new engine with modestly sized buffers in the initial state.
-    pub fn new(responder: HandshakeState) -> Self {
+    pub fn new(initiator: HandshakeState) -> Self {
         Self { 
-            state: State::NeedPacketLen, responder,
+            state: State::NeedPacketLen, initiator,
 
             rx_buf: BytesMut::with_capacity(512),
             tx_buf: BytesMut::with_capacity(512),
@@ -133,7 +133,7 @@ impl HandshakeEngine {
             return Err(ClientError::HandshakeFail("handshake engine finalization called prematurely".into()))
         }
 
-        Ok((self.tx_buf.freeze(), self.responder))
+        Ok((self.tx_buf.freeze(), self.initiator))
     }
 
     /// Used by `State::GenerateRequest` to manipulate the crypto libraries
@@ -143,19 +143,13 @@ impl HandshakeEngine {
         assert_eq!(self.state, State::GenerateRequest);
 
         // put initiator's message in the responder's buffer
-        let mut hs_init_addl = BytesMut::zeroed(1024);
-        let addl_sz = self.responder.read_message(&self.rx_buf, &mut hs_init_addl)?;
-        assert_eq!(addl_sz, 0);
-
-        // create our response ...
-        let mut hs_output = BytesMut::zeroed(1024); // TODO: no guarantee this is big enough?
-        let hs_sz = self.responder.write_message(&[], &mut hs_output)
-            .inspect_err(|e| error!("unexpected i/o error writing handshake {e:?}"))?;
+        let mut resp_buf = BytesMut::zeroed(1024);
+        let sz = self.initiator.read_message(&self.rx_buf, &mut resp_buf)?;
 
         // generate a wire packet in tx_buf ...
-        assert!(hs_sz < u16::MAX as usize);
-        self.tx_buf.put_u16(hs_sz as u16);
-        self.tx_buf.put(&hs_output[..hs_sz]);
+        assert!(sz < u16::MAX as usize);
+        self.tx_buf.put_u16(sz as u16);
+        self.tx_buf.put(&resp_buf[..sz]);
         self.state = State::DrainResponse;
 
         Ok(true)
@@ -178,12 +172,25 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
         .map_err(|e| { ClientError::BadConfig(format!("failed to read daemon private key: {e:?}")) })?;
 
     // TODO: don't love that we need to unwrap each step ...
-    let responder = snow::Builder::new(NOISE_INIT.parse()?)
+    let mut initiator = snow::Builder::new(NOISE_INIT.parse()?)
         .local_private_key(&key_daemon)?
         .remote_public_key(&key_controller)?
-        .build_responder()?;
+        .build_initiator()?;
 
-    let mut hs_engine = HandshakeEngine::new(responder);
+    // send the initiator our opening handshake
+    let mut init_message = [0u8; 2048];
+    let sz_i = initiator.write_message(&[], &mut init_message)?;
+
+    let mut init_packet = BytesMut::with_capacity(sz_i + 2);
+    init_packet.put_u16(sz_i as u16);
+    init_packet.put(&init_message[..sz_i]);
+
+    let sz_w = client.conn_s.write(&init_packet)
+        .map_err(ClientError::NetIo)?;
+
+    assert_eq!(sz_i + 2, sz_w);
+
+    let mut hs_engine = HandshakeEngine::new(initiator);
 
     client.conn_p.registry()
         .register(&mut client.conn_s, client_t, Interest::READABLE)
@@ -227,30 +234,10 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
         }
     }
 
-    // re-register as writable so we can send the handshake response ...
-    let (mut hs_output_packet, responder) = hs_engine.into_inner()?;
-
-    client.conn_p.registry()
-        .reregister(&mut client.conn_s, client_t, Interest::READABLE | Interest::WRITABLE)
-        .map_err(ClientError::NetIo)?;
-
-    'hs: loop {
-        client.conn_p.poll(&mut events, None).map_err(ClientError::NetIo)?;
-
-        for event in events.iter() {
-            if event.is_read_closed() || event.is_write_closed() {
-                return Err(ClientError::HandshakeFail("connection closed during handshake unexpectedly".into()));
-            }
-
-            if !event.is_writable() {
-                return Err(ClientError::HandshakeFail("unexpected read event during handshake transmit".into()))
-            }
-
-            if drain_hs_close(&mut hs_output_packet, &mut client.conn_s)? { break 'hs }
-        }
-    }
-
-    Ok(responder.into_transport_mode()?)
+    // process the response
+    let (hs_output_packet, initiator) = hs_engine.into_inner()?;
+    debug!(resp = &hs_output_packet[..], "peer handshake completed");
+    Ok(initiator.into_transport_mode()?)
 }
 
 fn drain_hs_open(hs: &mut HandshakeEngine, conn: &mut TcpStream) -> Result<(), ClientError> {
@@ -273,31 +260,9 @@ fn drain_hs_open(hs: &mut HandshakeEngine, conn: &mut TcpStream) -> Result<(), C
     }
 }
 
-fn drain_hs_close(packet: &mut Bytes, conn: &mut TcpStream) -> Result<bool, ClientError> {
-    'write: loop {
-        if packet.is_empty() { break 'write }
-
-        match conn.write(packet) {
-            Ok(0) => {
-                return Err(ClientError::UnexpectedEof("could not write handshake to socket ...".into()))
-            },
-
-            Ok(sz) => { packet.advance(sz); continue 'write }
-
-            Err(e) => {
-                if e.kind() == io::ErrorKind::Interrupted { continue 'write }
-                if e.kind() == io::ErrorKind::WouldBlock  { break 'write }
-                return Err(ClientError::NetIo(e));
-            },
-        }
-    }
-    
-    Ok(packet.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
-    use bytes::{Buf, BufMut, Bytes, BytesMut};
+    use bytes::{BufMut, Bytes, BytesMut};
     use crate::daemon::tcp::{NOISE_INIT};
     use snow::{HandshakeState, params::NoiseParams};
     use super::{HandshakeEngine, State};
@@ -418,34 +383,37 @@ mod tests {
         let (r_private, r_public) = gen_keypair();
         let (i_private, i_public) = gen_keypair();
 
-        let responder = get_responder(&r_private, &i_public);
-        let mut hs = HandshakeEngine::new(responder);
-
-        // pretend we're an initiator and write the packet like it would be
-        // on the wire from `snapcon` ...
+        // perform early initialization ...
+        // TODO: hs engine should probably just do this?
         let mut initiator = get_initiator(&i_private, &r_public);
         let mut init_buf = BytesMut::zeroed(1024); 
         let sz = initiator.write_message(&[], &mut init_buf)
             .expect("initiator could not write message ...");
 
-        let mut resp_buf = BytesMut::with_capacity(1024);
-        resp_buf.put_u16(sz as u16);
-        resp_buf.put(&init_buf[..sz]);
+        let mut hs = HandshakeEngine::new(initiator);
+
+        // pretend to be
+        // on the wire from `snapcon` ...
+        let mut responder = get_responder(&r_private, &i_public);
+        let mut resp_buf = BytesMut::zeroed(1024);
+        let sz = responder.read_message(&init_buf[..sz], &mut resp_buf)
+            .expect("responder could not read message");
+
+        assert_eq!(sz, 0); // add'l data should be empty
+
+        let sz = responder.write_message(&[], &mut resp_buf)
+            .expect("initiator could not write message ...");
+
+        let mut resp_pkt = BytesMut::with_capacity(1024);
+        resp_pkt.put_u16(sz as u16);
+        resp_pkt.put(&resp_buf[..sz]);
 
         // consume the fake wire packet
-        hs.consume(&resp_buf).expect("could not consume");
+        hs.consume(&resp_pkt[..(sz+2)]).expect("could not consume");
         let _ = hs.try_advance().expect("could not advance");
         let _ = hs.try_advance().expect("could not advance");
         let _ = hs.try_advance().expect("could not advance");
-        let (mut buf, responder) = hs.into_inner().expect("could not generate");
-
-        // actually write the response
-        let mut init_buf = BytesMut::zeroed(1024);
-        buf.advance(2); // skip the length needed for TCP frame ...
-        let sz = initiator.read_message(&buf, &mut init_buf)
-            .expect("initiator could not process packet");
-
-        assert_eq!(sz, 0); // NOTE: no additional data from our HS engine ...
+        let (_buf, initiator) = hs.into_inner().expect("could not generate");
 
         // enter transport mode and verify we can use the channel
         let mut tx = initiator.into_transport_mode().expect("send could not enter transport");

@@ -110,8 +110,8 @@ dependencies = [
 
 [[package]]
 name = "blinkedblist"
-version = "0.2.0"
-source = "git+https://git.sr.ht/~hime/blinkedblist#edc14a2e69ca9b26ea11b023c90221a0dfbe1895"
+version = "0.3.0"
+source = "git+https://git.sr.ht/~hime/blinkedblist#435b9f673d6a3455cc724b5afb64eb5af716d4f7"
 
 [[package]]
 name = "block-buffer"

@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 mod hs;
 mod wire;
 
-const NOISE_INIT: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
+const NOISE_INIT: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 
 ///
 /// The parameter-set needed to setup a new TCP client for a daemon.
