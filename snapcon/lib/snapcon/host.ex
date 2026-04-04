@@ -31,8 +31,7 @@ defmodule Snapcon.Host do
         {:error, {:length, n}} ->
           changeset |> add_error(:pubkey, "key too long (#{n} of 32)")
 
-        err ->
-          Logger.error "unknown pubkey error #{inspect(err)}"
+        _err ->
           changeset |> add_error(:pubkey, "could not parse pubkey")
     end
   end
