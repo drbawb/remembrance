@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::zfs::ZfsDatasetList;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -27,7 +29,7 @@ pub enum EventReq {
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventRep {
     Ident { version: u16, name: String },
-    ZfsList { list: Vec<String> },
+    ZfsList { list: ZfsDatasetList },
 }
 
 #[derive(Debug, Deserialize, Serialize)]

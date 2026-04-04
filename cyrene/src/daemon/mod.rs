@@ -14,6 +14,8 @@ use tcp::ClientError;
 
 pub mod err;
 pub mod msg;
+pub mod units;
+pub mod zfs;
 mod tcp;
 
 #[derive(Debug)]
@@ -36,7 +38,7 @@ impl Ratchet {
     /// The current restart timeout as a `std::time::Duration`
     pub fn wait(&self) -> Duration { Duration::from_secs(self.restart_secs) }
 
-    /// Reset the internal clock when the supervised thread starts successfully 
+    /// Reset the internal clock when the supervised thread starts successfully
     pub fn reset(&mut self, at: Instant) { self.last_start = at; }
 
     /// Ratchets up in `* 2` increments until reaching a 30s saturation point
@@ -65,7 +67,7 @@ impl Ratchet {
 struct Snooze(Arc<Mutex<Option<Waker>>>);
 
 impl Snooze {
-    pub fn new() -> Self { 
+    pub fn new() -> Self {
         Self(Arc::new(Mutex::new(None)))
     }
 
@@ -75,7 +77,7 @@ impl Snooze {
         if w.wake().is_err() { slot.take(); }
     }
 
-    pub fn reset(&self, w: Waker) { 
+    pub fn reset(&self, w: Waker) {
         let Ok(mut slot) = self.0.lock() else { return };
         slot.replace(w);
     }
@@ -127,7 +129,7 @@ pub fn run_command_queue() -> Result<String> {
                     error!("w/s disconnect: {msg:?}");
                 },
 
-                Err(err) => { 
+                Err(err) => {
                     error!(?err, "tcp socket shutdown prematurely");
                     todo!("unhandled w/s error")
                 }
@@ -252,7 +254,7 @@ impl DaemonKernel {
             let fr_end_t = fr_beg.elapsed();
 
             if fr_end_t > fr_budget_ms {
-                error!("event loop blocked {}ms", fr_end_t.as_millis()); 
+                error!("event loop blocked {}ms", fr_end_t.as_millis());
             }
 
             thread::sleep(fr_budget_ms.saturating_sub(fr_end_t));
@@ -285,7 +287,7 @@ impl DaemonKernel {
             match msg {
                 Ty::ZfsListDataset(args) => {
                     info!("zfs list :: {args:?}");
-                    let mut cmd = Command::new("zfs"); 
+                    let mut cmd = Command::new("zfs");
 
                     cmd.arg("list")
                        .arg("-p")
@@ -318,21 +320,17 @@ impl DaemonKernel {
                         return Ok(())
                     }
 
-                    // assume it came back as a bignasty string
-                    let mut buf = String::new();
+                    let mut raw: Vec<u8> = Vec::new();
 
                     let buf_n = subproc.stdout
                                        .expect("subproc stdout not available")
-                                       .read_to_string(&mut buf)?;
+                                       .read_to_end(&mut raw)?;
 
                     info!("({buf_n}b) response from ZFS");
                     info!("acknowledging {nonce:?}");
                     let new_ttl = msg::calc_ttl(30);
 
-                    let list = buf.lines()
-                                  .map(|line| line.to_owned())
-                                  .collect::<Vec<_>>();
-
+                    let list = zfs::parse_zfs_list(bytes::Bytes::from(raw));
                     let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsList { list });
 
                     sub_q.send(out_p)

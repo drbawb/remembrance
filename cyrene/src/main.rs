@@ -60,7 +60,12 @@ fn main() -> Result<ExitCode> {
 }
 
 fn entry_test() -> Result<ExitCode> {
+    use bytes::Bytes;
     use daemon::msg::EventReq;
+    use daemon::zfs;
+    use std::fs::OpenOptions;
+
+    use std::io::Read;
 
     let msg = EventReq::Ident { version: 0x1001 };
     let msg2 = EventReq::ZfsListDataset(ZfsListArgs {
@@ -75,6 +80,16 @@ fn entry_test() -> Result<ExitCode> {
 
     let buf = serde_json::to_string(&msg2)?;
     info!(buf, "json list-datasets\n");
+
+    let mut fo = OpenOptions::new();
+    let mut f = fo.read(true).open("priv/zfs-list.txt")?;
+
+    let mut io = Vec::new();
+    let sz = f.read_to_end(&mut io)?;
+    info!(size = sz, "read zfs listing from disk");
+
+    let ds = zfs::parse_zfs_list(Bytes::from(io));
+    info!(dbg = ?zfs::debug_print(&ds), "create zfs parse structure");
 
     Ok(ExitCode::from(0))
 }
