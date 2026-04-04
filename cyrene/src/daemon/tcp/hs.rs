@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use data_encoding::BASE64;
 use mio::{Events, Interest, Token};
 use mio::net::TcpStream;
@@ -9,32 +9,24 @@ use std::io::{self,Read, Write};
 
 use super::{Client, ClientError, NOISE_INIT};
 
-/// This encapsulates a simple state machine which performs a Noise KK
+/// This encapsulates a simple state machine which performs a Noise IK
 /// handshake based on an arbitrary amount of bytes being fed into
-/// it at any given instant.
+/// it at any given instant. (The handshake is performed as an initiator.)
 ///
 /// This is mostly useful in a networking context where its possible
 /// a `read` call may not return a complete handshake packet in a single
 /// execution and more bytes need to be read.
 ///
 /// The intended use is to:
-/// - call `consume()` until you are out of bytes
+/// - drain `tx_buf()` and send it in its entirety to the responder
+/// - call `consume()` as bytes arrive from the responder
 /// - in a tight loop call `try_advance()` until one of the following occurs
-///   - it returns `Ok(false)` indicating more bytes are required to advance
-///     to the next state ...
-///
+///   - it returns `Ok(false)` indicating more bytes are required
 ///   - it returns `Err(...)` indicating a fatal handshake failure
+///   - you have advanced to the final `Done` state
 ///
-///   - you have advanced to the final `DrainResponse` state, in which case
-///     you shoudl abort your read loop and consume this engine.
-/// 
-/// Calling `into_inner()` will error if the engine is not in the final
-/// `DrainResponse` state when it is invoked. Otherwise the engine will
-/// return the responder used to create this instance, along with the buffer
-/// containing the response message.
-/// 
-/// To complete the handshake you MUST send the response buffer to the initiator
-/// in its entirety, and then switch the responder into transport mode.
+/// Calling `into_inner()` will error if the engine is not in `Done`.
+/// Otherwise it returns the `HandshakeState` ready for `into_transport_mode()`.
 ///
 #[derive(Debug)]
 pub struct HandshakeEngine {
@@ -47,110 +39,121 @@ pub struct HandshakeEngine {
 
 /// The `HandshakeEngine` can be in one of the following states:
 ///
-/// 1. `NeedPacketLen` needs to read a big endian `u16` off the wire indicating
-///    the size of the incoming message from the initiator.
+/// 1. `DrainRequest` (initial) — `tx_buf` holds the framed opening packet.
+///    Caller sends it; `try_advance()` automatically transitions to
+///    `NeedPacketLen` once `tx_buf` is empty.
 ///
-/// 2. `NeedPacketBody` needs to read `len` more bytes off the wire so it
-///    can reconstruct the message from the initiator.
+/// 2. `NeedPacketLen` — needs a big-endian `u16` from the responder indicating
+///    the size of its reply.
 ///
-/// 3. `GenerateRequest` needs to consume the input buffer, decrypt it, and then
-///    formulate an encrypted response to the initiator.
+/// 3. `NeedPacketBody` — needs `len` more bytes to reconstruct the reply.
 ///
-/// 4. `DrainResponse` is the end-state, the engine can be consumed into its
-///    constituent parts which will contain the neccessary information to now
-///    complete the handshake.
+/// 4. `ProcessResponse` — decrypts the responder's message and completes
+///    the crypto handshake.
+///
+/// 5. `Done` — end state; call `into_inner()` to retrieve the `HandshakeState`.
 ///
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum State {
+    DrainRequest,
     NeedPacketLen,
     NeedPacketBody { len: usize },
-    GenerateRequest,
-    DrainResponse,
+    ProcessResponse,
+    Done,
 }
 
 impl HandshakeEngine {
-    /// Initialize a new engine with modestly sized buffers in the initial state.
-    pub fn new(initiator: HandshakeState) -> Self {
-        Self { 
-            state: State::NeedPacketLen, initiator,
+    /// Initialize a new engine, immediately writing the opening handshake
+    /// packet into `tx_buf`. Returns an engine in the `DrainRequest` state.
+    /// 
+    /// You must exhaust `tx_buf()` by transmitting it to a Noise responder,
+    /// and once done call `try_advance()` to move the engine to the next state.
+    ///
+    pub fn new(mut initiator: HandshakeState) -> Result<Self, ClientError> {
+        let mut tx_buf = BytesMut::with_capacity(512);
 
+        let mut msg_buf = BytesMut::zeroed(1024);
+        let sz = initiator.write_message(&[], &mut msg_buf)?;
+
+        assert!(sz < u16::MAX as usize);
+        tx_buf.put_u16(sz as u16);
+        tx_buf.put(&msg_buf[..sz]);
+
+        Ok(Self {
+            state: State::DrainRequest, initiator,
             rx_buf: BytesMut::with_capacity(512),
-            tx_buf: BytesMut::with_capacity(512),
-        }
+            tx_buf,
+        })
     }
 
-    /// Called at any time you receive bytes from the initiator.
+    /// Returns the outgoing packet buffer. Only meaningful during `DrainRequest`.
+    ///
+    pub fn tx_buf(&self) -> &[u8] { &self.tx_buf }
+
+    /// Called whenever bytes arrive from the responder.
     ///
     /// You *MUST NOT* pass non-handshake related bytes into this engine.
-    /// If the stream can interleave bytes intended for other recipients you
-    /// must have some method to frame them, such that they are not passed
-    /// into the handshake engine.
-    ///
     /// Any excess bytes past the end of the handshake *WILL NOT BE RETURNED.*
     ///
     pub fn consume(&mut self, input: &[u8]) -> Result<(), ClientError> {
         match self.state {
             State::NeedPacketLen | State::NeedPacketBody { .. } => { /* fine */ },
 
-            // only safe to call consume when we are in a read-context
-            State::GenerateRequest | State::DrainResponse => {
-                return Err(ClientError::HandshakeFail("cannot consume anymore, please drain D:".into()))
-            }
+            // only safe to call consume when we are waiting for responder bytes
+            _ => return Err(ClientError::HandshakeFail("cannot consume in current state".into())),
         }
 
         self.rx_buf.put(input); Ok(())
     }
 
-    /// After reading bytes you should periodically try to advance the state
-    /// of the engine until it reaches the end-state.
+    /// Attempt to advance the state machine. Returns `Ok(true)` if the state
+    /// changed, `Ok(false)` if more bytes are needed, or `Err` on failure.
     ///
     pub fn try_advance(&mut self) -> Result<bool, ClientError> {
         match self.state {
+            State::DrainRequest => {
+                if !self.tx_buf.is_empty() { return Ok(false) }
+                self.state = State::NeedPacketLen;
+                Ok(true)
+            },
+
             State::NeedPacketLen => {
                 if self.rx_buf.len() < 2 { return Ok(false) }
 
                 let len = self.rx_buf.get_u16() as usize;
                 self.state = State::NeedPacketBody { len };
-                Ok(true) // know length of request body
+                Ok(true)
             },
 
             State::NeedPacketBody { len } => {
                 if self.rx_buf.len() < len { return Ok(false) }
-                self.state = State::GenerateRequest;
-                Ok(true) // have full request body
+                self.state = State::ProcessResponse;
+                Ok(true)
             },
 
-            State::GenerateRequest => self.do_response(),
-            State::DrainResponse => unreachable!("h/s advanced past finalization"),
+            State::ProcessResponse => self.do_process_response(),
+            State::Done => unreachable!("h/s advanced past finalization"),
         }
     }
 
-    /// Once the engine has entered the end-state you can consume it and proceed
-    /// to finalize the handshake.
+    /// Once the engine has entered `Done` you can consume it to get the
+    /// crypto engine back, configured in `transport` mode.
     ///
-    pub fn into_inner(self) -> Result<(Bytes, HandshakeState), ClientError> {
-        if self.state != State::DrainResponse {
+    pub fn into_inner(self) -> Result<TransportState, ClientError> {
+        if self.state != State::Done {
             return Err(ClientError::HandshakeFail("handshake engine finalization called prematurely".into()))
         }
 
-        Ok((self.tx_buf.freeze(), self.initiator))
+        Ok(self.initiator.into_transport_mode()?)
     }
 
-    /// Used by `State::GenerateRequest` to manipulate the crypto libraries
-    /// handshake object to complete the challenge/response.
-    ///
-    fn do_response(&mut self) -> Result<bool, ClientError> {
-        assert_eq!(self.state, State::GenerateRequest);
+    /// `ProcessResponse`: decrypt the responder's reply and complete the handshake.
+    fn do_process_response(&mut self) -> Result<bool, ClientError> {
+        assert_eq!(self.state, State::ProcessResponse);
 
-        // put initiator's message in the responder's buffer
         let mut resp_buf = BytesMut::zeroed(1024);
-        let sz = self.initiator.read_message(&self.rx_buf, &mut resp_buf)?;
-
-        // generate a wire packet in tx_buf ...
-        assert!(sz < u16::MAX as usize);
-        self.tx_buf.put_u16(sz as u16);
-        self.tx_buf.put(&resp_buf[..sz]);
-        self.state = State::DrainResponse;
+        self.initiator.read_message(&self.rx_buf, &mut resp_buf)?;
+        self.state = State::Done;
 
         Ok(true)
     }
@@ -164,6 +167,10 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
     // some loop configuration ...
     let mut events = Events::with_capacity(128);
 
+    client.conn_p.registry()
+        .register(&mut client.conn_s, client_t, Interest::READABLE | Interest::WRITABLE)
+        .map_err(ClientError::NetIo)?;
+
     // setup the crypto block
     let key_controller = BASE64.decode(client.cfg.controller.pubkey.as_bytes())
         .map_err(|e| { ClientError::BadConfig(format!("failed to read controller public key: {e:?}")) })?;
@@ -171,29 +178,37 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
     let key_daemon = BASE64.decode(client.cfg.controller.privkey.as_bytes())
         .map_err(|e| { ClientError::BadConfig(format!("failed to read daemon private key: {e:?}")) })?;
 
-    // TODO: don't love that we need to unwrap each step ...
-    let mut initiator = snow::Builder::new(NOISE_INIT.parse()?)
+    let initiator = snow::Builder::new(NOISE_INIT.parse()?)
         .local_private_key(&key_daemon)?
         .remote_public_key(&key_controller)?
         .build_initiator()?;
 
-    // send the initiator our opening handshake
-    let mut init_message = [0u8; 2048];
-    let sz_i = initiator.write_message(&[], &mut init_message)?;
+    let mut hs_engine = HandshakeEngine::new(initiator)?;
 
-    let mut init_packet = BytesMut::with_capacity(sz_i + 2);
-    init_packet.put_u16(sz_i as u16);
-    init_packet.put(&init_message[..sz_i]);
+    // send the opening packet
+    'hs: loop {
+        client.conn_p.poll(&mut events, None).map_err(ClientError::NetIo)?;
 
-    let sz_w = client.conn_s.write(&init_packet)
-        .map_err(ClientError::NetIo)?;
+        'ev: for event in events.iter() {
+            if event.is_writable() && event.is_write_closed() {
+                return Err(ClientError::UnexpectedEof("peer hungup before h/s initiated".into()))
+            }
 
-    assert_eq!(sz_i + 2, sz_w);
+            if !event.is_writable() { continue 'ev } else { break 'ev }
+        }
 
-    let mut hs_engine = HandshakeEngine::new(initiator);
+        let pkt = hs_engine.tx_buf().to_vec();
+        let sz_w = client.conn_s.write(&pkt).map_err(ClientError::NetIo)?;
+        assert_eq!(pkt.len(), sz_w);
+        debug!("initiator wrote {sz_w} bytes");
+        hs_engine.tx_buf.clear();
+        assert!(hs_engine.try_advance()?);
+        break 'hs
+    }
 
+    // read the responder's reply
     client.conn_p.registry()
-        .register(&mut client.conn_s, client_t, Interest::READABLE)
+        .reregister(&mut client.conn_s, client_t, Interest::READABLE)
         .map_err(ClientError::NetIo)?;
 
     'hs: loop {
@@ -213,31 +228,23 @@ pub fn perform_handshake(client: &mut Client, client_t: Token) -> Result<Transpo
 
         'state: loop { /* pump state machine until impossible or complete ... */
             match hs_engine.state {
-                State::NeedPacketLen => {
+                State::NeedPacketLen | State::NeedPacketBody { .. } | State::ProcessResponse => {
                     if !hs_engine.try_advance()? { continue 'hs }
                     continue 'state
                 },
 
-                State::NeedPacketBody { .. } => {
-                    if !hs_engine.try_advance()? { continue 'hs }
-                    continue 'state
+                State::Done => { break 'hs },
+
+                State::DrainRequest => {
+                    unreachable!("unexpected drain state during responder read loop")
                 },
-
-
-                State::GenerateRequest => {
-                    if !hs_engine.try_advance()? { continue 'hs }
-                    continue 'state
-                },
-
-                State::DrainResponse => { break 'hs },
             }
         }
     }
 
-    // process the response
-    let (hs_output_packet, initiator) = hs_engine.into_inner()?;
-    debug!(resp = &hs_output_packet[..], "peer handshake completed");
-    Ok(initiator.into_transport_mode()?)
+    let initiator = hs_engine.into_inner()?;
+    debug!("peer handshake completed");
+    Ok(initiator)
 }
 
 fn drain_hs_open(hs: &mut HandshakeEngine, conn: &mut TcpStream) -> Result<(), ClientError> {
@@ -267,7 +274,6 @@ mod tests {
     use snow::{HandshakeState, params::NoiseParams};
     use super::{HandshakeEngine, State};
 
-    
     fn gen_keypair() -> (Bytes, Bytes) {
         let noise_parms = NOISE_INIT.parse::<NoiseParams>().expect("parse failure");
 
@@ -280,143 +286,120 @@ mod tests {
     fn get_initiator(private: &[u8], public: &[u8]) -> HandshakeState {
         let noise_parms = NOISE_INIT.parse::<NoiseParams>().expect("parse failure");
 
-        let initiator = snow::Builder::new(noise_parms)
+        snow::Builder::new(noise_parms)
             .local_private_key(private).expect("cannot set private key")
             .remote_public_key(public).expect("cannot set public key")
-            .build_initiator().expect("cannot build responder");
-
-        initiator // output an initiator or PANIC
+            .build_initiator().expect("cannot build initiator")
     }
 
     fn get_responder(private: &[u8], public: &[u8]) -> HandshakeState {
         let noise_parms = NOISE_INIT.parse::<NoiseParams>().expect("parse failure");
 
-        let responder = snow::Builder::new(noise_parms)
+        snow::Builder::new(noise_parms)
             .local_private_key(private).expect("cannot set private key")
             .remote_public_key(public).expect("cannot set public key")
-            .build_responder().expect("cannot build responder");
+            .build_responder().expect("cannot build responder")
+    }
 
-        responder // output a responder or PANIC
+    /// Returns an engine in `DrainRequest` and a responder that has not yet
+    /// seen any bytes.
+    fn make_engine_and_responder() -> (HandshakeEngine, HandshakeState) {
+        let (r_private, r_public) = gen_keypair();
+        let (i_private, i_public) = gen_keypair();
+
+        let initiator = get_initiator(&i_private, &r_public);
+        let responder = get_responder(&r_private, &i_public);
+
+        let hs = HandshakeEngine::new(initiator).expect("engine construction failed");
+        assert_eq!(hs.state, State::DrainRequest);
+
+        (hs, responder)
+    }
+
+    /// Simulates the responder receiving the engine's opening packet and
+    /// returning a framed reply packet.
+    fn responder_reply(hs: &HandshakeEngine, responder: &mut HandshakeState) -> BytesMut {
+        // the engine's tx_buf is framed: u16 len + body
+        let tx = hs.tx_buf();
+        let body_len = u16::from_be_bytes([tx[0], tx[1]]) as usize;
+        let body = &tx[2..2 + body_len];
+
+        let mut tmp = BytesMut::zeroed(1024);
+        let sz = responder.read_message(body, &mut tmp).expect("responder could not read opening");
+        assert_eq!(sz, 0);
+
+        let sz = responder.write_message(&[], &mut tmp).expect("responder could not write reply");
+
+        let mut pkt = BytesMut::with_capacity(sz + 2);
+        pkt.put_u16(sz as u16);
+        pkt.put(&tmp[..sz]);
+        pkt
+    }
+
+    #[test]
+    fn new_primes_opening_packet() {
+        let (_r_private, r_public) = gen_keypair();
+        let (i_private, _i_public) = gen_keypair();
+
+        let initiator = get_initiator(&i_private, &r_public);
+        let hs = HandshakeEngine::new(initiator).expect("engine construction failed");
+
+        assert_eq!(hs.state, State::DrainRequest);
+        assert!(hs.tx_buf().len() > 2); // at least a u16 + some body
     }
 
     #[test]
     fn short_read_len() {
-        let (k_private, k_public) = gen_keypair();
-        let responder = get_responder(&k_private, &k_public);
+        let (mut hs, mut responder) = make_engine_and_responder();
+        let reply = responder_reply(&hs, &mut responder);
 
-        let mut hs = HandshakeEngine::new(responder);
-        hs.consume(&[0x2A]).expect("read failed");
+        hs.tx_buf.clear();
+        hs.try_advance().expect("drain advance failed"); // DrainRequest -> NeedPacketLen
+        assert_eq!(hs.state, State::NeedPacketLen);
+
+        // feed only one byte of the length prefix
+        hs.consume(&reply[..1]).expect("consume failed");
         let advanced = hs.try_advance().expect("advance should not error");
         assert_eq!(false, advanced);
         assert_eq!(hs.state, State::NeedPacketLen);
 
-        hs.consume(&[0x45]).expect("read failed");
+        // feed the second byte
+        hs.consume(&reply[1..2]).expect("consume failed");
         let advanced = hs.try_advance().expect("advance should not error");
         assert_eq!(true, advanced);
-        assert_eq!(hs.state, State::NeedPacketBody { len: 0x2A45 });
+        let body_len = u16::from_be_bytes([reply[0], reply[1]]) as usize;
+        assert_eq!(hs.state, State::NeedPacketBody { len: body_len });
     }
 
     #[test]
-    fn attempt_initiate() {
-        let (r_private, r_public) = gen_keypair();
-        let (i_private, i_public) = gen_keypair();
+    fn attempt_process_response() {
+        let (mut hs, mut responder) = make_engine_and_responder();
+        let reply = responder_reply(&hs, &mut responder);
 
-        let responder = get_responder(&r_private, &i_public);
-        let mut hs = HandshakeEngine::new(responder);
-
-        // pretend we're an initiator and write the packet like it would be
-        // on the wire from `snapcon` ...
-        let mut initiator = get_initiator(&i_private, &r_public);
-
-        let mut init_buf = BytesMut::zeroed(1024); 
-        let sz = initiator.write_message(&[], &mut init_buf)
-            .expect("initiator could not write message ...");
-
-        let mut resp_buf = BytesMut::with_capacity(1024);
-        resp_buf.put_u16(sz as u16);
-        resp_buf.put(&init_buf[..sz]);
-
-        // consume the fake wire packet
-        hs.consume(&resp_buf).expect("could not consume");
-        let turn = hs.try_advance().expect("could not advance");
+        hs.tx_buf.clear();
+        hs.try_advance().expect("drain advance failed"); // -> NeedPacketLen
+        hs.consume(&reply).expect("could not consume");
+        let _ = hs.try_advance().expect("could not advance"); // NeedPacketLen -> NeedPacketBody
+        let _ = hs.try_advance().expect("could not advance"); // NeedPacketBody -> ProcessResponse
+        let turn = hs.try_advance().expect("could not advance"); // ProcessResponse -> Done
         assert_eq!(true, turn);
-        assert_eq!(hs.state, State::NeedPacketBody { len: sz });
-
-        let turn = hs.try_advance().expect("could not advance");
-        assert_eq!(true, turn);
-        assert_eq!(hs.state, State::GenerateRequest);
-    }
-
-    #[test]
-    fn attempt_generate() {
-        let (r_private, r_public) = gen_keypair();
-        let (i_private, i_public) = gen_keypair();
-
-        let responder = get_responder(&r_private, &i_public);
-        let mut hs = HandshakeEngine::new(responder);
-
-        // pretend we're an initiator and write the packet like it would be
-        // on the wire from `snapcon` ...
-        let mut initiator = get_initiator(&i_private, &r_public);
-        let mut init_buf = BytesMut::zeroed(1024); 
-        let sz = initiator.write_message(&[], &mut init_buf)
-            .expect("initiator could not write message ...");
-
-        let mut resp_buf = BytesMut::with_capacity(1024);
-        resp_buf.put_u16(sz as u16);
-        resp_buf.put(&init_buf[..sz]);
-
-        // consume the fake wire packet
-        hs.consume(&resp_buf).expect("could not consume");
-        let _ = hs.try_advance().expect("could not advance");
-        let _ = hs.try_advance().expect("could not advance");
-        let turn = hs.try_advance().expect("could not advance");
-        assert_eq!(true, turn);
-        assert_eq!(hs.state, State::DrainResponse);
-
-        let (buf, _) = hs.into_inner().expect("could not generate");
-        assert!(buf.len() > 0);
+        assert_eq!(hs.state, State::Done);
     }
 
     #[test]
     fn attempt_transport() {
-        let (r_private, r_public) = gen_keypair();
-        let (i_private, i_public) = gen_keypair();
+        let (mut hs, mut responder) = make_engine_and_responder();
+        let reply = responder_reply(&hs, &mut responder);
 
-        // perform early initialization ...
-        // TODO: hs engine should probably just do this?
-        let mut initiator = get_initiator(&i_private, &r_public);
-        let mut init_buf = BytesMut::zeroed(1024); 
-        let sz = initiator.write_message(&[], &mut init_buf)
-            .expect("initiator could not write message ...");
-
-        let mut hs = HandshakeEngine::new(initiator);
-
-        // pretend to be
-        // on the wire from `snapcon` ...
-        let mut responder = get_responder(&r_private, &i_public);
-        let mut resp_buf = BytesMut::zeroed(1024);
-        let sz = responder.read_message(&init_buf[..sz], &mut resp_buf)
-            .expect("responder could not read message");
-
-        assert_eq!(sz, 0); // add'l data should be empty
-
-        let sz = responder.write_message(&[], &mut resp_buf)
-            .expect("initiator could not write message ...");
-
-        let mut resp_pkt = BytesMut::with_capacity(1024);
-        resp_pkt.put_u16(sz as u16);
-        resp_pkt.put(&resp_buf[..sz]);
-
-        // consume the fake wire packet
-        hs.consume(&resp_pkt[..(sz+2)]).expect("could not consume");
+        hs.tx_buf.clear();
+        hs.try_advance().expect("drain advance failed"); // -> NeedPacketLen
+        hs.consume(&reply).expect("could not consume");
         let _ = hs.try_advance().expect("could not advance");
         let _ = hs.try_advance().expect("could not advance");
         let _ = hs.try_advance().expect("could not advance");
-        let (_buf, initiator) = hs.into_inner().expect("could not generate");
 
         // enter transport mode and verify we can use the channel
-        let mut tx = initiator.into_transport_mode().expect("send could not enter transport");
+        let mut tx = hs.into_inner().expect("send could not enter transport");
         let mut rx = responder.into_transport_mode().expect("recv could not enter transport");
 
         let mut test_packet = BytesMut::zeroed(1024);
