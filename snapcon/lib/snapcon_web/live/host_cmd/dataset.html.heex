@@ -17,9 +17,9 @@
     <%= for ds <- @datasets do %>
     <tr>
       <td><%= ds.name %></td>
-      <td class="ta-right"><%= Units.display(ds.used_space) %></td>
-      <td class="ta-right"><%= Units.display(ds.used_snap) %></td>
-      <td class="ta-right"><%= Units.display(ds.avail_space) %></td>
+      <td class="ta-right"><%= Units.display(ds.used) %></td>
+      <td class="ta-right"><%= Units.display(ds.usedsnap) %></td>
+      <td class="ta-right"><%= Units.display(ds.avail) %></td>
 
       <td class="ta-center">
         <button class="button">todo</button>

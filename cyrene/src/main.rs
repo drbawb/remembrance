@@ -91,6 +91,9 @@ fn entry_test() -> Result<ExitCode> {
     let ds = zfs::parse_zfs_list(Bytes::from(io));
     info!(dbg = ?zfs::debug_print(&ds), "create zfs parse structure");
 
+    let dsj = serde_json::to_string(&ds)?;
+    println!("{}", dsj);
+
     Ok(ExitCode::from(0))
 }
 

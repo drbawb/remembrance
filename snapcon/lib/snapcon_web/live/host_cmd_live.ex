@@ -3,6 +3,8 @@ defmodule SnapconWeb.HostCommandLive do
 
   alias Phoenix.PubSub
   alias Snapcon.DaemonServ
+  alias Snapcon.ZfsTree
+  alias Snapcon.ZfsNode
 
   embed_templates "host_cmd/*"
 
@@ -24,13 +26,16 @@ defmodule SnapconWeb.HostCommandLive do
 
     socket = case list_result do
       {:ok, %{"ZfsList" => %{"list" => datasets}}} -> 
-
-        Logger.debug "got #{inspect(datasets |> Enum.take(3))}"
         socket
-        |> assign(:datasets, Enum.map(datasets, &list_ent/1))
+        |> assign(:datasets, Enum.map(datasets, &cast_list_ent/1))
+
+      {:ok, %ZfsTree{ list: roots }} ->
+        socket
+        |> assign(:datasets, ZfsTree.flatten(roots))
 
       {:error, msg} ->
         Logger.error("could not list host :: #{inspect(msg)}")
+
         socket
         |> assign(:error_list, [msg])
       end
@@ -58,8 +63,10 @@ defmodule SnapconWeb.HostCommandLive do
     dataset(assigns)
   end
 
-  defp list_ent(dataset_str) do
-    [name, avail, used, used_snap] = String.split(dataset_str, "\t")
-    %{name: name, avail_space: avail, used_space: used, used_snap: used_snap}
+  @spec cast_list_ent(map()) :: ZfsNode.t()
+  defp cast_list_ent(dset_obj) do
+    %ZfsNode{} 
+    |> ZfsNode.changeset(dset_obj)
+    |> Ecto.Changeset.apply_action!(:parse)
   end
 end

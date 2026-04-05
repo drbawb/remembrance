@@ -330,8 +330,9 @@ impl DaemonKernel {
                     info!("acknowledging {nonce:?}");
                     let new_ttl = msg::calc_ttl(30);
 
-                    let list = zfs::parse_zfs_list(bytes::Bytes::from(raw));
-                    let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsList { list });
+                    let dataset_list = zfs::parse_zfs_list(bytes::Bytes::from(raw));
+                    let list = dataset_list.to_tree();
+                    let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsTree { list });
 
                     sub_q.send(out_p)
                          .inspect_err(|err| error!("daemon->ws error: {err:?}"))

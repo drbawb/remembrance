@@ -3,6 +3,7 @@ defmodule Snapcon.TcpServer do
 
   alias Decibel
   alias Snapcon.DaemonServ
+  alias Snapcon.ZfsTree
   alias ThousandIsland.Socket, as: TCP
   require Logger
 
@@ -56,12 +57,13 @@ defmodule Snapcon.TcpServer do
     - `reserved`: protocol bitfield, defaults to 0
     - `len`: the length of the payload contents NOT INCLUDING this header
     """
-    @type t :: %__MODULE__ {
-      nonce: <<_::16>>,
-      ttl: <<_::8>>,
-      flags: <<_::4>>,
-      reserved: <<_::2>>,
-      len: <<_::2>>}
+    @type t :: %__MODULE__{
+      nonce: <<_::128>>,
+      ttl: non_neg_integer(),
+      flags: non_neg_integer(),
+      reserved: non_neg_integer(),
+      len: non_neg_integer()
+    }
 
     defstruct [
       nonce: :crypto.strong_rand_bytes(16),
@@ -154,7 +156,7 @@ defmodule Snapcon.TcpServer do
     %{state | assigns: put_in(state.assigns, [key], val) }
   end
 
-  defp assign(state, key, val) do
+  defp assign(state, key, val) when is_list(key) do
     %{state | assigns: put_in(state.assigns, key, val) }
   end
 
@@ -223,8 +225,20 @@ defmodule Snapcon.TcpServer do
             GenServer.reply(reply_ref, {:ok, packet})
             assign(state, :pending, pending)
 
+          %{"ZfsTree" => tree} ->
+            pending = state.assigns[:pending]
+            {reply_ref, pending} = Map.pop!(pending, header.nonce)
+            
+            parsed_tree = %ZfsTree{}
+            |> ZfsTree.changeset(tree)
+            |> Ecto.Changeset.apply_action(:parse)
+
+            GenServer.reply(reply_ref, parsed_tree)
+            assign(state, :pending, pending)
+
           msg ->
             Logger.warning "unhandled packet :: #{inspect(msg)}"
+            msg |> dbg
             state
         end
 
@@ -234,14 +248,29 @@ defmodule Snapcon.TcpServer do
     state
   end
 
+  @spec read_packet(HandlerState.t(), binary()) :: HandlerState.t()
   defp read_packet(state, buf) do
     {state, header, tail} = read_header(state, buf)
-    {state, msg} = read_message(state, header, tail)
-    handle_packet(state, {header, Jason.decode!(msg)})
+
+    case read_message(state, header, tail) do
+      {:error, reason} ->
+        Logger.error "could not read packet: #{inspect(reason)}"
+
+      {ciphertext, rest} ->
+        if byte_size(rest) > 0 do
+          Logger.error "ignoring packet trai; need continuations: #{rest}"
+          state # TODO: decryptor might be out of sync?
+        else
+          msg = Decibel.decrypt(state.noise, ciphertext)
+          handle_packet(state, {header, Jason.decode!(msg)})
+        end
+    end
   end
 
+  @type read_result :: {:error, binary()} | {binary(), binary()}
+  @spec read_message(HandlerState.t(), Header.t(), binary()) :: read_result()
   defp read_message(state, header, message) do
-    {ciphertext, rest} = cond do
+    cond do
       byte_size(message) < header.len ->
         read_message_more(state, header, message)
 
@@ -249,15 +278,9 @@ defmodule Snapcon.TcpServer do
         <<pl::binary-size(header.len), tail::binary>> = message
         {pl, tail}
     end
-
-    if byte_size(rest) > 0, do:
-      raise "todo: unexpected tail; need continuations ..."
-
-    msg = Decibel.decrypt(state.noise, ciphertext)
-
-    {state, msg}
   end
 
+  @spec read_message_more(HandlerState.t(), Header.t(), binary()) :: read_result()
   defp read_message_more(state, header, buf) do
     case TCP.recv(state.socket, 0, 1_000) do
       {:ok, ciphertext} ->
@@ -267,6 +290,7 @@ defmodule Snapcon.TcpServer do
     end
   end
 
+  @spec read_header(HandlerState.t(), binary()) :: {HandlerState.t(), Header.t(), binary()}
   defp read_header(state, buf) when byte_size(buf) < 32 do
     case TCP.recv(state.socket, 0, 1_000) do
       {:ok, ciphertext} ->
@@ -282,7 +306,7 @@ defmodule Snapcon.TcpServer do
     len::unsigned-16, tail::binary
   >>) do
 
-    {state, %{
+    {state, %Header{
       nonce: nonce, ttl: ttl,
       flags: flags, reserved: r,
       len: len

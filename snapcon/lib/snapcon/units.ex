@@ -15,7 +15,9 @@ defmodule Snapcon.Units do
 
   defp display_r(amt, []), do: "#{amt}B"
 
-  defp display_r(amt, [{unit,scale} | t]) do
+  defp display_r(amt, [_]) when is_nil(amt), do: "NIL"
+
+  defp display_r(amt, [{unit,scale} | t]) when not is_nil(amt) do
     cond do
       amt >= scale -> 
         decimal_str = :erlang.float_to_binary(amt / scale, [decimals: 2])

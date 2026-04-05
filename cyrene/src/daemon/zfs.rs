@@ -1,6 +1,7 @@
 use blinkedblist::List as Blist;
 use bytes::Bytes;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::SeqAccess, de::Visitor, ser::SerializeSeq};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de::SeqAccess, de::Visitor, ser::SerializeSeq};
 
 /// A single dataset row from `zfs list -pHo name,avail,used,usedsnap`.
 /// `name` is a zero-copy slice into the original stdout `Bytes`.
@@ -22,6 +23,55 @@ pub struct ZfsDataset {
 /// Implements `Serialize` as a JSON array.
 ///
 pub struct ZfsDatasetList(pub Blist<ZfsDataset>);
+
+/// Tree-shaped representation of a dataset hierarchy.
+/// Each node owns its children. Natural for recursive destructuring
+/// on the receiving end (e.g. Elixir pattern matching).
+///
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ZfsTreeNode {
+    #[serde(serialize_with = "bytes_as_str", deserialize_with = "str_as_bytes")]
+    pub name:     Bytes,
+    pub avail:    u64,
+    pub used:     u64,
+    pub usedsnap: u64,
+    pub children: Vec<ZfsTreeNode>,
+}
+
+impl ZfsDatasetList {
+    /// Build a nested tree from the flat list. Roots (parent=None) become
+    /// top-level entries. Uses the parent slot indices to reconstruct hierarchy.
+    pub fn to_tree(&self) -> Vec<ZfsTreeNode> {
+        let entries: Vec<&ZfsDataset> = self.0.iter().collect();
+        let n = entries.len();
+
+        // each slot accumulates its children; walk reverse so leaves are ready first
+        let mut buckets: Vec<Vec<ZfsTreeNode>> = (0..n).map(|_| Vec::new()).collect();
+        let mut roots: Vec<ZfsTreeNode> = Vec::new();
+
+        for i in (0..n).rev() {
+            let e = entries[i];
+            let mut kids = std::mem::take(&mut buckets[i]);
+            kids.reverse(); // children were pushed in reverse order
+
+            let node = ZfsTreeNode {
+                name:     e.name.clone(),
+                avail:    e.avail,
+                used:     e.used,
+                usedsnap: e.usedsnap,
+                children: kids,
+            };
+
+            match e.parent {
+                Some(p) => buckets[p as usize].push(node),
+                None    => roots.push(node),
+            }
+        }
+
+        roots.reverse();
+        roots
+    }
+}
 
 /// Parse `zfs list -pHo name,avail,used,usedsnap` stdout into a flat list.
 /// `buf` is the frozen stdout `Bytes`; `name` fields are zero-copy slices.
@@ -201,5 +251,51 @@ mod tests {
         assert!(json.contains("\"parent\":0"));
 
         println!("json: {json:?}");
+    }
+
+    #[test]
+    fn test_to_tree_basic() {
+        let input = b"tank\t100\t50\t10\ntank/data\t80\t40\t5\ntank/data/sub\t70\t30\t2\n";
+        let list = parse_zfs_list(Bytes::from_static(input));
+        let tree = list.to_tree();
+
+        assert_eq!(tree.len(), 1); // one root
+        assert_eq!(&tree[0].name[..], b"tank");
+        assert_eq!(tree[0].children.len(), 1);
+        assert_eq!(&tree[0].children[0].name[..], b"tank/data");
+        assert_eq!(tree[0].children[0].children.len(), 1);
+        assert_eq!(&tree[0].children[0].children[0].name[..], b"tank/data/sub");
+        assert!(tree[0].children[0].children[0].children.is_empty());
+    }
+
+    #[test]
+    fn test_to_tree_multi_pool() {
+        let input = b"rpool\t200\t100\t0\ntank\t100\t50\t10\ntank/data\t80\t40\t5\n";
+        let list = parse_zfs_list(Bytes::from_static(input));
+        let tree = list.to_tree();
+
+        assert_eq!(tree.len(), 2); // two roots
+        assert_eq!(&tree[0].name[..], b"rpool");
+        assert!(tree[0].children.is_empty());
+        assert_eq!(&tree[1].name[..], b"tank");
+        assert_eq!(tree[1].children.len(), 1);
+    }
+
+    #[test]
+    fn test_tree_roundtrip_json() {
+        let input = b"tank\t100\t50\t10\ntank/data\t80\t40\t5\n";
+        let list = parse_zfs_list(Bytes::from_static(input));
+        let tree = list.to_tree();
+
+        let json = serde_json::to_string(&tree).expect("serialize tree");
+        let back: Vec<ZfsTreeNode> = serde_json::from_str(&json).expect("deserialize tree");
+
+        assert_eq!(back.len(), 1);
+        assert_eq!(&back[0].name[..], b"tank");
+        assert_eq!(back[0].avail, 100);
+        assert_eq!(back[0].children.len(), 1);
+        assert_eq!(&back[0].children[0].name[..], b"tank/data");
+
+        println!("tree json: {json}");
     }
 }
