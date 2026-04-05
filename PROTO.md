@@ -26,9 +26,10 @@ The transport is periodically kept alive via the controller sending
 `EventReq::Ping` messages at regular intervals to test connection liveness.
 
 The connection initialization involves setting up an encrypted `Noise` channel
-with the following configuration: `Noise_KK_25519_ChaChaPoly_BLAKE2s`. Early
+with the following configuration: `Noise_IK_25519_ChaChaPoly_BLAKE2s`. Early
 packets for performing this handshake are prefixed with a big-endian u16 length,
-followed by the contents as specified by the Noise protocol framework.
+followed by the contents as specified by the Noise protocol framework. The
+controller acts as a responder, and the daemon acts as the initiator.
 
 If an authenticated channel is unable to be established the peers MUST 
 disconnect immediately. As soon as the handshake is complete the peers will
