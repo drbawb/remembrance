@@ -22,6 +22,7 @@ pub struct ZfsDataset {
 /// Parent-child relationships are encoded via `ZfsDataset::parent` indices.
 /// Implements `Serialize` as a JSON array.
 ///
+#[derive(Debug)]
 pub struct ZfsDatasetList(pub Blist<ZfsDataset>);
 
 /// Tree-shaped representation of a dataset hierarchy.
@@ -142,12 +143,6 @@ impl<'de> Deserialize<'de> for ZfsDatasetList {
         }
 
         d.deserialize_seq(ListVisitor)
-    }
-}
-
-impl std::fmt::Debug for ZfsDatasetList {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ZfsDatasetList({:?})", self.0)
     }
 }
 
