@@ -113,6 +113,7 @@ pub fn parse_zfs_list(buf: Bytes) -> ZfsDatasetList {
 }
 
 impl Serialize for ZfsDatasetList {
+    // TODO: add blinkedblist support for serde
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut seq = s.serialize_seq(None)?;
         for entry in self.0.iter() {
@@ -123,6 +124,7 @@ impl Serialize for ZfsDatasetList {
 }
 
 impl<'de> Deserialize<'de> for ZfsDatasetList {
+    // TODO:: add blinkedblist support for serde
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct ListVisitor;
 
@@ -166,10 +168,12 @@ pub fn debug_print(list: &ZfsDatasetList) {
     }
 }
 
+// TODO: bytes crate enable serde feature(?)
 fn bytes_as_str<S: Serializer>(b: &Bytes, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(std::str::from_utf8(b).unwrap_or(""))
 }
 
+// TODO: bytes crate enable serde feature(?)
 fn str_as_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
     let s = <&str>::deserialize(d)?;
     Ok(Bytes::copy_from_slice(s.as_bytes()))

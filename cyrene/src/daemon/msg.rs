@@ -28,8 +28,27 @@ pub enum EventReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EventRep {
+    /// The response to an `Ident` request includes the daemon's
+    /// preferred protocol version, along with its configured host name.
+    ///
+    /// - The version should either match what was in the `Ident` request,
+    ///   OR the controller/daemon must do additional negotiation to ensure
+    ///   the selected version is compatible.
+    ///
+    /// - The name sent MUST match what the controller has on-file for the
+    ///   configured encryption key, or the controller will abort the connection.
+    ///  
     Ident { version: u16, name: String },
+
+    /// A flat listing of all datasets. (It is important that a receiver
+    /// maintain consistent ordering of this list, as the parent back-pointer
+    /// is encoded as an index into this list.)
+    ///
     ZfsList { list: ZfsDatasetList },
+
+    /// A list of root datasets. (There may be more than one on a system with
+    /// several ZFS pools imported simultaneously.)
+    ///
     ZfsTree { list: Vec<ZfsTreeNode> },
 }
 

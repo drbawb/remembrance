@@ -1,4 +1,5 @@
 use blinkedblist::List as Blist;
+use bytes::Bytes;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use mio::Waker;
 use tracing::{info, error, warn};
@@ -330,7 +331,7 @@ impl DaemonKernel {
                     info!("acknowledging {nonce:?}");
                     let new_ttl = msg::calc_ttl(30);
 
-                    let dataset_list = zfs::parse_zfs_list(bytes::Bytes::from(raw));
+                    let dataset_list = zfs::parse_zfs_list(Bytes::from(raw));
                     let list = dataset_list.to_tree();
                     let out_p = Packet::from_parts(nonce.0, new_ttl, EventRep::ZfsTree { list });
 
